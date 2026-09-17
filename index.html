@@ -146,7 +146,7 @@
   </header>
 
   <div class="controls">
-    <label class="field" for="apiKey">TypeSafe API key <span class="hint-inline">stored in memory only, never logged</span>
+    <label class="field" for="apiKey">TypeSafe API key 
       <input id="apiKey" type="password" autocomplete="off" placeholder="paste key here" />
     </label>
     <button id="newGameBtn" type="button">↺ New Game</button>
@@ -195,6 +195,9 @@
   var reqPreEl = document.getElementById("reqPre");
   var resPreEl = document.getElementById("resPre");
   var exchangeCount = 0;
+  var memJev = null;   // previous Jev move key, e.g. "r7c8"
+  var memHuman = null; // previous human move key, e.g. "r8c8"
+  var memPlan = null;  // previous strategic focus string
 
   function pretty(obj, cap) {
     var s;
@@ -276,6 +279,9 @@
     lastJevCell = null;
     lastJevRC = null;
     lastConfidence = null;
+    memJev = null;
+    memHuman = null;
+    memPlan = null;
     // Do NOT clear the API key input (required).
     renderStatus({});
     renderTraffic("No requests yet.", "—", "—");
@@ -429,7 +435,7 @@
   // himself. Local win>block>best is kept ONLY as a safety net if Jev's reply
   // is missing/malformed/occupied.
   var MAX_OPTIONS = 40; // shrink from ~225 empties to top-N tactical candidates
-  var BASE_INSTRUCTIONS = "You are O. One stone only.\nPriority, in order:\n1. Complete five-in-a-row for O this move.\n2. Block a cell where X would complete five next move.\n3. Block or create an open four.\n4. Play on an intersection of two threats.\n5. Never play far from existing stones.\nIgnore symmetry-copying X's line unless it also blocks X.";
+  var BASE_INSTRUCTIONS = "You are O. One stone only.\n\nDecision protocol:\n1. Play a winning move if available.\n2. Otherwise block any immediate X win.\n3. Otherwise create or block an open four.\n4. Prefer forks (two simultaneous threats).\n5. Stay near existing stones.\n6. Ignore symmetry unless it prevents a threat.";
 
   function dirName(dr, dc) {
     if (dr === 0 && dc === 1) return "horizontal";
@@ -604,38 +610,174 @@
     return s;
   }
 
-  function labelCell(r, c, ev, xWins) {
-    var key = "r" + r + "c" + c;
-    if (ev.oWin && ev.xWin) {
-      return "WINS O now AND BLOCKS X: completes five for O " + ev.oWinDir + " at " + key + " — top priority";
-    }
-    if (ev.oWin) {
-      return "WINS O: completes five-in-a-row for O " + ev.oWinDir + " at " + key + " — play here now";
-    }
-    if (ev.xWin) {
-      return "BLOCKS X: X has four " + ev.xWinDir + "; this cell " + key + " is the fifth — must block now";
-    }
-    var parts = [];
-    if (ev.oMax >= 4) parts.push("creates O open-four " + ev.oDir + " (" + ev.oMax + " in a row)");
-    else if (ev.oGapFour) parts.push("creates O BROKEN four " + ev.oGapDir + " (gap pattern — one move from five)");
-    else if (ev.oMax === 3) parts.push("extends O to 3 " + ev.oDir + (ev.oOpen === 2 ? " open both ends" : ""));
-    else if (ev.oMax === 2) parts.push("extends O to 2 " + ev.oDir);
-    else parts.push("weak for O (only " + ev.oMax + " " + ev.oDir + ")");
-    if (ev.oOpenThree && ev.oMax < 4 && !ev.oGapFour) parts.push("forms O open-three threat");
-    if (ev.xMax >= 4) parts.push("BLOCKS X four " + ev.xDir);
-    else if (ev.xGapFour) parts.push("BLOCKS X BROKEN four " + ev.xGapDir + " (covers the gap)");
-    else if (ev.xMax >= 3) parts.push("blocks X 3 " + ev.xDir);
-    else if (ev.xOpenThree) parts.push("covers X open-three shape");
-    else if (xWins.length) {
-      var names = xWins.slice(0, 3).map(function (w) { return w.key; }).join(", ");
-      parts.push("does NOT stop X's winning cell(s) at " + names);
+  // Tactical tiers for presentation. Numeric scores stay internal (sort only):
+  // S = forced win/block, A = critical four-level/fork, B = three-level, C = positional.
+  function tierOf(ev) {
+    if (ev.oWin || ev.xWin) return "S";
+    if (ev.oMax >= 4 || ev.oGapFour || ev.xMax >= 4 || ev.xGapFour || ev.doubleO || ev.doubleX) return "A";
+    if (ev.oMax === 3 || ev.xMax === 3 || ev.oOpenThree || ev.xOpenThree) return "B";
+    return "C";
+  }
+
+  // One-line tactical description. Avoid-moves are relabeled by the caller.
+  function labelCell(r, c, ev) {
+    if (ev.oWin && ev.xWin) return "WINS O now and BLOCKS X win";
+    if (ev.oWin) return "WINS O now";
+    if (ev.xWin) return "BLOCKS X win";
+    // Weight each side the way scores do, then label the stronger one.
+    var oW = ev.oMax >= 4 ? 4 : ev.oGapFour ? 3.6 : (ev.oMax === 3 && ev.oOpen === 2) || ev.oOpenThree ? 3 : ev.oMax === 3 ? 2 : ev.oMax === 2 ? 1 : 0;
+    var xW = ev.xMax >= 4 ? 3.8 : ev.xGapFour ? 3.4 : (ev.xMax === 3 && ev.xOpen === 2) || ev.xOpenThree ? 2.8 : ev.xMax === 3 ? 1.8 : ev.xMax === 2 ? 0.8 : 0;
+    if (ev.doubleO && oW < 3) oW = 3.2; // a fork outranks a lone three
+    if (ev.doubleX && xW < 3) xW = 3.0;
+    var s;
+    if (oW >= xW && oW > 0) {
+      if (ev.oMax >= 4) s = "Creates open four";
+      else if (ev.oGapFour) s = "Creates broken four";
+      else if ((ev.oMax === 3 && ev.oOpen === 2) || ev.oOpenThree) s = "Creates open three";
+      else if (ev.oMax === 3) s = "Extends O three";
+      else s = "Extends O two";
+      if (ev.doubleO) s += " + fork";
+    } else if (xW > 0) {
+      if (ev.xMax >= 4) s = "Blocks open four";
+      else if (ev.xGapFour) s = "Blocks broken four";
+      else if ((ev.xMax === 3 && ev.xOpen === 2) || ev.xOpenThree) s = "Blocks open three";
+      else if (ev.xMax === 3) s = "Blocks X three";
+      else s = "Covers X two";
+      if (ev.doubleX) s += " + fork";
     } else {
-      parts.push("does not need to block X here");
+      s = "Positional move";
     }
-    if (ev.doubleO) parts.push("intersection of two O threats");
-    if (ev.doubleX) parts.push("intersection of two X threats");
-    if (ev.dist > 2) parts.push("FAR from stones — avoid per rule 5");
-    return parts.join("; ");
+    return s;
+  }
+
+  // ---- Presentation layer: summary, PV, tiers (analysis above is untouched) ----
+
+  // Single-move attack strength for `who` placed at (r,c), reusing lineInfo
+  // and windowBest. Scale: 5000+ five, 4000+ four, 3500+ broken four,
+  // 3000+ open three, 2000+ three, 1000+ two.
+  function attackStrength(b, r, c, who) {
+    var best = 0;
+    for (var k = 0; k < 4; k++) {
+      var li = lineInfo(b, r, c, DIRS4[k][0], DIRS4[k][1], who);
+      var wb = windowBest(b, r, c, DIRS4[k][0], DIRS4[k][1], who);
+      var s = li.total * 1000 + li.open * 100;
+      if (wb.four && li.total < 4) s += 500;
+      if (wb.openThree) s += 200;
+      if (s > best) best = s;
+    }
+    return best;
+  }
+
+  function levelName(s) {
+    if (s >= 5000) return "five";
+    if (s >= 4000) return "four";
+    if (s >= 3500) return "broken four";
+    if (s >= 3000) return "open three";
+    if (s >= 2000) return "three";
+    if (s >= 1000) return "two";
+    return "quiet";
+  }
+
+  // Strongest attacking reply for `who` on board b (near-stone empties only).
+  function bestAttackCell(b, who) {
+    var best = null;
+    for (var r = 0; r < SIZE; r++) {
+      for (var c = 0; c < SIZE; c++) {
+        if (b[r][c]) continue;
+        if (nearestDist(b, r, c) > 2) continue;
+        var s = attackStrength(b, r, c, who);
+        if (!best || s > best.s) best = { r: r, c: c, key: "r" + r + "c" + c, s: s };
+      }
+    }
+    return best;
+  }
+
+  // Principal variation for one O candidate: O move, strongest X reply,
+  // strongest O continuation — all from existing local evaluation, no API.
+  function pvFor(b, cand) {
+    if (cand.ev.oWin) return "PV: O " + cand.key + " wins immediately.";
+    var s1 = [];
+    for (var i = 0; i < SIZE; i++) s1.push(b[i].slice());
+    s1[cand.r][cand.c] = "O";
+    var xw = findWinningCells(s1, "X");
+    if (xw.length) return "PV: O " + cand.key + ", X " + xw[0].key + " wins immediately — O's move fails.";
+    var xr = bestAttackCell(s1, "X");
+    if (!xr) return "PV: O " + cand.key + " (board full).";
+    s1[xr.r][xr.c] = "X";
+    var ow = findWinningCells(s1, "O");
+    if (ow.length) return "PV: O " + cand.key + ", X " + xr.key + ", O " + ow[0].key + " wins.";
+    var oc = bestAttackCell(s1, "O");
+    var oS = oc ? oc.s : 0;
+    var res = oS > xr.s ? "O keeps initiative" : oS < xr.s ? "X keeps initiative" : "balanced";
+    return "PV: O " + cand.key + ", X " + xr.key + ", O " + (oc ? oc.key : "—") +
+      " — O " + levelName(oS) + " vs X " + levelName(xr.s) + ", " + res + ".";
+  }
+
+  // 1-based critical-area box, e.g. "R7–R9, C6–C9".
+  function bboxArea(cells) {
+    if (!cells.length) return null;
+    var r0 = 99, r1 = -1, c0 = 99, c1 = -1, i;
+    for (i = 0; i < cells.length; i++) {
+      if (cells[i].r < r0) r0 = cells[i].r;
+      if (cells[i].r > r1) r1 = cells[i].r;
+      if (cells[i].c < c0) c0 = cells[i].c;
+      if (cells[i].c > c1) c1 = cells[i].c;
+    }
+    var rs = r0 === r1 ? "R" + (r0 + 1) : "R" + (r0 + 1) + "–R" + (r1 + 1);
+    var cs = c0 === c1 ? "C" + (c0 + 1) : "C" + (c0 + 1) + "–C" + (c1 + 1);
+    return rs + ", " + cs;
+  }
+
+  function stonesOf(b) {
+    var out = [];
+    for (var r = 0; r < SIZE; r++) {
+      for (var c = 0; c < SIZE; c++) {
+        if (b[r][c]) out.push({ r: r, c: c });
+      }
+    }
+    return out;
+  }
+
+  // Compact position summary from already-evaluated near-cells.
+  function buildSummary(b, cands, oWins, xWins, xBuilds) {
+    var oFour = 0, oBroken = 0, oThree = 0, xFour = 0, xBroken = 0, xThree = 0, oForks = 0, xForks = 0;
+    for (var i = 0; i < cands.length; i++) {
+      var ev = cands[i].ev;
+      if (ev.oMax >= 4 && ev.oOpen > 0) oFour++;
+      if (ev.oGapFour) oBroken++;
+      if (ev.oOpenThree || (ev.oMax === 3 && ev.oOpen === 2)) oThree++;
+      if (ev.xMax >= 4 && ev.xOpen > 0) xFour++;
+      if (ev.xGapFour) xBroken++;
+      if (ev.xOpenThree || (ev.xMax === 3 && ev.xOpen === 2)) xThree++;
+      if (ev.doubleO) oForks++;
+      if (ev.doubleX) xForks++;
+    }
+    var focus;
+    if (oWins.length) focus = "attack — take the win now";
+    else if (xWins.length) focus = "defend — block X's win first";
+    else if (xBuilds.length) focus = "defend first, then build a fork";
+    else if (oFour || oBroken || oForks) focus = "attack — extend the threat or build a fork";
+    else if (oThree) focus = "attack — grow the open three";
+    else focus = "develop near existing stones";
+    var hot = oWins.concat(xWins).concat(xBuilds.slice(0, 6));
+    var L = ["Position summary:"];
+    L.push(xWins.length ? "- X has " + xWins.length + " immediate winning threat" + (xWins.length > 1 ? "s" : "") + "." : "- No immediate X wins.");
+    L.push(oWins.length ? "- O has " + oWins.length + " immediate winning move" + (oWins.length > 1 ? "s" : "") + "." : "- No immediate O wins.");
+    var oa = [];
+    if (oFour) oa.push(oFour + " open-four");
+    if (oBroken) oa.push(oBroken + " broken-four");
+    if (oThree) oa.push(oThree + " open-three");
+    L.push(oa.length ? "- O attacks: " + oa.join(", ") + " squares." : "- O attacks: none.");
+    var xa = [];
+    if (xFour) xa.push(xFour + " open-four");
+    if (xBroken) xa.push(xBroken + " broken-four");
+    if (xThree) xa.push(xThree + " open-three");
+    L.push(xa.length ? "- X attacks: " + xa.join(", ") + " squares." : "- X attacks: none.");
+    if (oForks || xForks) L.push("- Forks: O " + oForks + " / X " + xForks + " squares.");
+    var area = bboxArea(hot.length ? hot : stonesOf(b));
+    if (area) L.push("- Critical area: " + area + ".");
+    L.push("- Strategic focus: " + focus + ".");
+    return { text: L.join("\n"), focus: focus };
   }
 
   // Shrink: keep only near-stone tactical candidates, labeled with WHY.
@@ -745,45 +887,53 @@
         picked.push({ r: free[f].r, c: free[f].c, key: free[f].key, ev: evalCell(b, free[f].r, free[f].c), score: 0 });
       }
     }
-    // Label with rank + score so Jev sees the order (sorted strongest-first).
+    // Position summary from all evaluated near-cells (pre-cap, full picture).
+    var summary = buildSummary(b, cands, oWins, xWins, xBuilds);
+    // Principal variation for the top 6, existing local evaluation only.
+    var pvMap = {};
+    var pvN = Math.min(6, picked.length);
+    for (var q = 0; q < pvN; q++) pvMap[picked[q].key] = pvFor(b, picked[q]);
+    // Tiered one-line labels. Numeric scores stay internal (sort order only).
     var criteria = {};
     for (var p = 0; p < picked.length; p++) {
-      var label = labelCell(picked[p].r, picked[p].c, picked[p].ev, xWins);
-      if (picked[p].ev.allowsXWin && picked[p].ev.allowsXWin.length) {
-        label += "; ALLOWS X WIN at " + picked[p].ev.allowsXWin.join(", ") + " next move — avoid unless winning";
-      }
-      if (picked[p].ev.allowsXForce && picked[p].ev.allowsXForce.length) {
-        label += "; ALLOWS X FORCED WIN via " + picked[p].ev.allowsXForce.join(", ") + " (open-four/double threat in 2) — avoid";
-      }
-      criteria[picked[p].key] = "#" + (p + 1) + "/" + picked.length +
-        " score=" + picked[p].score + " — " + label;
+      var cell = picked[p], evp = cell.ev;
+      var avoid = null;
+      if (evp.allowsXWin && evp.allowsXWin.length) avoid = "Avoid (allows X win next)";
+      else if (evp.allowsXForce && evp.allowsXForce.length) avoid = "Avoid (allows X forced win)";
+      var tier = avoid ? "C" : tierOf(evp);
+      var val = "Tier " + tier + " #" + (p + 1) + " — " + (avoid ? avoid : labelCell(cell.r, cell.c, evp));
+      if (pvMap[cell.key]) val += "\n" + pvMap[cell.key];
+      criteria[cell.key] = val;
     }
-    return { criteria: criteria, xWins: xWins, oWins: oWins, xBuilds: xBuilds, picked: picked };
+    return { criteria: criteria, xWins: xWins, oWins: oWins, xBuilds: xBuilds, picked: picked, summary: summary };
   }
 
-  // Dynamic per-move hints so Jev enforces win/block HIMSELF (#1 via prompt,
-  // not via client override). Returns the full instructions string to send.
+  // Dynamic per-move instructions: summary + memory + protocol + hints.
+  // Jev enforces win/block HIMSELF via prompt, never via client override.
   function buildInstructions(analyzed) {
     var s = BASE_INSTRUCTIONS +
-      "\nOptions are sorted strongest-first as #1/N, #2/N… with score=N; prefer the top items unless you see a forced win." +
-      " Never play a move labeled ALLOWS X WIN — it loses on the very next move." +
-      " Avoid moves labeled ALLOWS X FORCED WIN — X forces an unstoppable open-four/double threat two moves later.";
+      "\n\nOptions are ranked Tier S (forced win/block) > A (critical) > B (strong) > C (positional), #1 strongest; follow the order unless you see a forced win." +
+      " Never play a move labeled Avoid — it loses now or hands X a forced win.";
+    s += "\n\n" + analyzed.summary.text;
+    s += "\n\nPrevious turn:\n- Jev: " + (memJev || "none yet") +
+      "\n- Human: " + (memHuman || "none yet") +
+      "\n- Previous plan: " + (memPlan || "none yet");
     if (analyzed.oWins.length) {
       var ow = analyzed.oWins.map(function (w) { return w.key; }).join(", ");
-      s += "\nHINT — YOU CAN WIN NOW: O completes five-in-a-row at " + ow +
-        ". You must choose one of these WINS O options this move. Do not play anywhere else.";
+      s += "\n\nHINT — YOU CAN WIN NOW: O completes five-in-a-row at " + ow +
+        ". You must choose one of these Tier S options this move. Do not play anywhere else.";
     } else if (analyzed.xWins.length) {
       var xw = analyzed.xWins.map(function (w) { return w.key; }).join(", ");
-      s += "\nHINT — YOU MUST BLOCK NOW: X will complete five next move at " + xw +
-        ". You must choose a BLOCKS X option covering it. Any other move loses immediately." +
-        " Options labeled 'does NOT stop X' do NOT save you — ignore symmetry-copying.";
+      s += "\n\nHINT — YOU MUST BLOCK NOW: X will complete five next move at " + xw +
+        ". You must choose a Tier S BLOCKS option covering it. Any other move loses immediately." +
+        " Tier C options do NOT save you — ignore symmetry-copying.";
     } else if (analyzed.xBuilds && analyzed.xBuilds.length) {
       var xb = analyzed.xBuilds.slice(0, 3).map(function (w) { return w.key; }).join(", ");
-      s += "\nHINT — X is building toward a forcing attack around " + xb +
-        ". Prefer BLOCKS / BROKEN-four options contesting those squares over quiet extensions of your own line." +
+      s += "\n\nHINT — X is building toward a forcing attack around " + xb +
+        ". Prefer Tier A options contesting those squares over quiet extensions of your own line." +
         " Symmetry-copying X elsewhere does NOT stop this — contest the build-up directly.";
     } else {
-      s += "\nHINT — no immediate five for either side. Create or block an open-four, or take an intersection of two threats. Stay near stones.";
+      s += "\n\nHINT — no immediate five for either side. Follow the protocol: best Tier A/B attack or fork, stay near stones.";
     }
     return s;
   }
@@ -942,6 +1092,8 @@
       lastMove = { r: pos.r, c: pos.c, who: "O" };
       lastJevCell = "r" + pos.r + "c" + pos.c;
       lastJevRC = { r: pos.r, c: pos.c };
+      memJev = lastJevCell;
+      memPlan = analyzed.summary.focus;
       var line = checkWin(board, pos.r, pos.c, "O");
       waiting = false;
       if (line) { winner = "O"; winningLine = line; gameLive = false; }
@@ -977,6 +1129,7 @@
     }
     board[r][c] = "X";
     lastMove = { r: r, c: c, who: "X" };
+    memHuman = "r" + r + "c" + c;
     var line = checkWin(board, r, c, "X");
     if (line) {
       winner = "X"; winningLine = line; gameLive = false;
