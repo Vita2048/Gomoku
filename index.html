@@ -19,77 +19,146 @@
 <title>Jef (TypeSafe AI) Tic-Tac-Toe demo</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
 <style>
-  :root { color-scheme: light; }
+  :root {
+    color-scheme: light;
+    --bg1: #eef2ff; --bg2: #faf5ff; --bg3: #ecfdf5;
+    --ink: #0f172a; --muted: #64748b; --line: #e2e8f0;
+    --card: #ffffff; --accent: #4f46e5; --accent2: #7c3aed;
+    --ok: #16a34a; --bad: #dc2626; --warn: #b45309;
+    --shadow: 0 12px 32px rgba(30, 27, 75, 0.12);
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
   body {
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-    margin: 0; padding: 24px;
-    background: #f6f7f9; color: #1a1a1a;
+    font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    margin: 0; padding: 32px 20px 48px; color: var(--ink);
+    background:
+      radial-gradient(900px 320px at 15% -5%, #c7d2fe 0%, transparent 60%),
+      radial-gradient(800px 300px at 90% 0%, #ddd6fe 0%, transparent 55%),
+      linear-gradient(135deg, var(--bg1), var(--bg2) 48%, var(--bg3));
+    min-height: 100vh;
     display: flex; flex-direction: column; align-items: center;
   }
-  main { width: 100%; max-width: 1080px; }
-  h1 { margin: 0 0 4px; font-size: 1.6rem; }
-  .subtitle { margin: 0 0 16px; color: #555; }
+  main { width: 100%; max-width: 1120px; }
+  .hero {
+    background: linear-gradient(180deg, #ffffff, #f8faff);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 20px 22px 16px; margin-bottom: 14px;
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 4px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2), #06b6d4);
+  }
+  .brand { display: flex; gap: 14px; align-items: center; }
+  .logo {
+    width: 44px; height: 44px; border-radius: 12px; flex: 0 0 44px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 1.1rem;
+    box-shadow: 0 6px 16px rgba(79, 70, 229, 0.4);
+  }
+  h1 { margin: 0; font-size: 1.55rem; letter-spacing: -0.02em; }
+  .subtitle { margin: 4px 0 10px; color: var(--muted); }
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .badge {
+    font-size: 0.78rem; font-weight: 600; padding: 4px 10px; border-radius: 999px;
+    background: #eef2ff; border: 1px solid #c7d2fe; color: #3730a3;
+  }
+  .badge.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .badge.green { background: #dcfce7; border-color: #bbf7d0; color: #166534; }
   .controls {
-    display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;
-    background: #fff; border: 1px solid #ddd; border-radius: 10px;
-    padding: 12px 14px; margin-bottom: 12px;
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 14px 16px; margin-bottom: 14px; box-shadow: var(--shadow);
   }
-  .field { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
+  .field { display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem; font-weight: 600; flex: 1 1 260px; }
+  .field span.hint-inline { font-weight: 400; color: var(--muted); }
   .field input {
-    padding: 8px 10px; border: 1px solid #bbb; border-radius: 6px;
-    font-size: 0.95rem; min-width: 220px;
+    padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 10px;
+    font-size: 0.95rem; min-width: 0; width: 100%; background: #f8fafc;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
+  .field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.18); background: #fff; }
   button {
-    padding: 9px 14px; border-radius: 6px; border: 1px solid #333;
-    background: #1a1a1a; color: #fff; cursor: pointer; font-size: 0.95rem;
+    padding: 11px 18px; border-radius: 10px; border: none;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #fff; cursor: pointer; font-size: 0.95rem; font-weight: 700;
+    box-shadow: 0 6px 16px rgba(79, 70, 229, 0.35);
+    transition: transform 0.12s, box-shadow 0.12s, filter 0.12s;
+    white-space: nowrap;
   }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  button.secondary { background: #fff; color: #1a1a1a; }
+  button:hover { transform: translateY(-1px); filter: brightness(1.05); }
+  button:active { transform: translateY(0); }
   #status {
-    background: #fff; border: 1px solid #ddd; border-radius: 10px;
-    padding: 10px 14px; margin-bottom: 12px; min-height: 3.2em;
-    font-size: 0.95rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+    background: var(--card); border: 1px solid var(--line); border-left: 5px solid var(--accent);
+    border-radius: var(--radius); padding: 12px 16px; margin-bottom: 14px; min-height: 3.2em;
+    font-size: 0.95rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+    box-shadow: var(--shadow);
   }
-  #status .err { color: #b00020; }
-  #status .warn { color: #8a5a00; }
+  #status .err { color: var(--bad); font-weight: 600; }
+  #status .warn { color: var(--warn); font-weight: 600; }
+  .game-row { display: grid; grid-template-columns: minmax(300px, 640px) minmax(300px, 1fr); gap: 16px; align-items: start; justify-content: center; }
+  @media (max-width: 980px) { .game-row { grid-template-columns: 1fr; } }
+  .board-card {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 14px; box-shadow: var(--shadow);
+  }
+  .board-card .board-title { font-size: 0.85rem; font-weight: 700; color: var(--muted); margin: 0 0 4px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .board-card .legend-note { font-size: 0.76rem; color: var(--muted); margin: 0 0 10px; }
+  .board-card .legend-note b { color: var(--ink); }
+  #canvas-holder canvas { cursor: pointer; }
   #canvas-holder { display: flex; justify-content: center; }
-  .game-row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; justify-content: center; }
   #inspector {
-    flex: 1 1 320px; min-width: 280px; max-width: 440px;
-    background: #fff; border: 1px solid #ddd; border-radius: 10px;
-    padding: 10px 12px; font-size: 0.85rem;
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 12px 14px; font-size: 0.85rem; box-shadow: var(--shadow);
+    position: sticky; top: 16px;
   }
-  #inspector h2 { margin: 0 0 6px; font-size: 1rem; }
-  #inspector .meta { color: #475569; margin: 8px 0 4px; font-size: 0.8rem; }
+  #inspector h2 { margin: 0 0 6px; font-size: 1rem; display: flex; align-items: center; gap: 8px; }
+  .live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.15); }
+  #inspector .meta { color: var(--muted); margin: 8px 0 4px; font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+  #trafficMeta { text-transform: none; font-size: 0.85rem; color: var(--ink); font-weight: 600; }
   #inspector pre {
-    background: #0f172a; color: #e2e8f0; padding: 8px; border-radius: 8px;
+    background: #0f172a; color: #e2e8f0; padding: 10px; border-radius: 10px;
     max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word;
-    font-size: 0.72rem; line-height: 1.45; margin: 0;
+    font-size: 0.72rem; line-height: 1.5; margin: 0; border: 1px solid #1e293b;
   }
   canvas { border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,0.12); touch-action: manipulation; }
-  .hint { font-size: 0.85rem; color: #666; margin-top: 10px; }
+  .hint { font-size: 0.85rem; color: var(--muted); margin-top: 12px; text-align: center; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Jef (TypeSafe AI) Tic-Tac-Toe demo</h1>
-  <p class="subtitle">Human player is X, Jev is O, 15&times;15, five in a row</p>
+  <header class="hero">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">5◦</div>
+      <div>
+        <h1>Jef (TypeSafe AI) Tic-Tac-Toe demo</h1>
+        <p class="subtitle">Human player is X, Jev is O, 15&times;15, five in a row</p>
+      </div>
+    </div>
+    <div class="badges">
+      <span class="badge">X · You</span>
+      <span class="badge">O · Jev</span>
+      <span class="badge green">15&times;15 board</span>
+      <span class="badge green">5 in a row wins</span>
+      <span class="badge dark">jev-latest</span>
+    </div>
+  </header>
 
   <div class="controls">
-    <label class="field" for="apiKey">TypeSafe API key
+    <label class="field" for="apiKey">TypeSafe API key <span class="hint-inline">stored in memory only, never logged</span>
       <input id="apiKey" type="password" autocomplete="off" placeholder="paste key here" />
     </label>
-    <label class="field" for="model">Model (optional)
-      <input id="model" type="text" value="jev-latest" autocomplete="off" spellcheck="false" />
-    </label>
-    <button id="newGameBtn" type="button">New Game</button>
+    <button id="newGameBtn" type="button">↺ New Game</button>
   </div>
 
   <div id="status" role="status" aria-live="polite">Loading…</div>
   <div class="game-row">
-    <div id="canvas-holder"></div>
+    <section class="board-card">
+      <div id="canvas-holder"></div>
+    </section>
     <aside id="inspector" aria-label="Jev API traffic">
-      <h2>Jev traffic <span style="font-weight:400;color:#64748b">(key redacted)</span></h2>
+      <h2><span class="live-dot" aria-hidden="true"></span>Jev traffic <span style="font-weight:400;color:#64748b">(key redacted)</span></h2>
       <div class="meta" id="trafficMeta">No requests yet.</div>
       <div class="meta">Request &rarr;</div>
       <pre id="reqPre">—</pre>
@@ -117,10 +186,10 @@
   var winningLine = [];     // [{r,c}]
   var statusEl = document.getElementById("status");
   var apiKeyEl = document.getElementById("apiKey");
-  var modelEl = document.getElementById("model");
   var newGameBtn = document.getElementById("newGameBtn");
   var gameId = 0;           // bumped on New Game to ignore stale responses
   var lastJevCell = null;
+  var lastJevRC = null; // {r, c} 0-based, for R1–R15 / C1–C15 display
   var lastConfidence = null;
   var trafficMetaEl = document.getElementById("trafficMeta");
   var reqPreEl = document.getElementById("reqPre");
@@ -167,6 +236,11 @@
     return String(s == null ? "" : s).replace(/Bearer\s+[A-Za-z0-9._~+\/=\-]+/gi, "Bearer [REDACTED]");
   }
 
+  // Human-readable square: R1–R15 top→bottom, C1–C15 left→right (1-based).
+  function humanCell(r, c) {
+    return "R" + (r + 1) + " C" + (c + 1);
+  }
+
   function setStatus(html) {
     statusEl.innerHTML = html;
   }
@@ -181,7 +255,11 @@
     else turn = "Your turn (X) — click an empty square.";
 
     var html = esc(turn);
-    if (lastJevCell) html += "<br>" + esc("Last Jev move: " + lastJevCell + (lastConfidence != null ? " (confidence " + lastConfidence + ")" : ""));
+    if (lastJevCell) {
+      var hm = lastJevRC ? " (" + humanCell(lastJevRC.r, lastJevRC.c) + ")" : "";
+      var cf = lastConfidence != null ? " (confidence " + lastConfidence + ")" : "";
+      html += "<br>" + esc("Last Jev move: " + lastJevCell + hm + cf);
+    }
     if (opts.warn) html += '<br><span class="warn">' + esc(redact(opts.warn)) + "</span>";
     if (opts.error) html += '<br><span class="err">' + esc(redact(opts.error)) + "</span>";
     setStatus(html);
@@ -196,6 +274,7 @@
     lastMove = null;
     winningLine = [];
     lastJevCell = null;
+    lastJevRC = null;
     lastConfidence = null;
     // Do NOT clear the API key input (required).
     renderStatus({});
@@ -371,6 +450,39 @@
     return { total: 1 + pos + neg, open: (posOpen ? 1 : 0) + (negOpen ? 1 : 0) };
   }
 
+  // Gap-pattern vision: sliding 5-window over an 11-cell line with (r,c)
+  // simulated as `who`. Catches broken fours (e.g. SS_SS) and open threes
+  // that contiguous counting undervalues.
+  function windowBest(b, r, c, dr, dc, who) {
+    var ch = [];
+    for (var k = -5; k <= 5; k++) {
+      if (k === 0) { ch.push("S"); continue; }
+      var nr = r + dr * k, nc = c + dc * k;
+      if (!inBounds(nr, nc)) { ch.push("#"); continue; }
+      var v = b[nr][nc];
+      ch.push(v === who ? "S" : (!v ? "." : "#"));
+    }
+    var out = { five: false, four: false, openFour: false, openThree: false, three: false };
+    for (var s = 1; s <= 5; s++) {
+      var cntS = 0, cntD = 0, bad = false;
+      for (var j = 0; j < 5; j++) {
+        if (ch[s + j] === "S") cntS++;
+        else if (ch[s + j] === ".") cntD++;
+        else { bad = true; break; }
+      }
+      if (bad) continue;
+      if (cntS === 5) out.five = true;
+      else if (cntS === 4 && cntD === 1) {
+        out.four = true;
+        if (ch[s - 1] === "." && ch[s + 5] === ".") out.openFour = true;
+      } else if (cntS === 3 && cntD === 2) {
+        out.three = true;
+        if (ch[s - 1] === "." && ch[s + 5] === ".") out.openThree = true;
+      }
+    }
+    return out;
+  }
+
   function nearestDist(b, r, c) {
     var best = 99;
     for (var rr = 0; rr < SIZE; rr++) {
@@ -412,6 +524,17 @@
       if (oLines[k].total >= 3 && oLines[k].open > 0) oThreats++;
       if (xLines[k].total >= 3 && xLines[k].open > 0) xThreats++;
     }
+    // Gap-pattern vision per direction (broken fours, open threes with a gap).
+    var oGapFour = false, xGapFour = false, oOpenThree = false, xOpenThree = false;
+    var oGapDir = null, xGapDir = null;
+    for (k = 0; k < 4; k++) {
+      var ow = windowBest(b, r, c, DIRS4[k][0], DIRS4[k][1], "O");
+      if (ow.four && oLines[k].total < 4 && !oGapFour) { oGapFour = true; oGapDir = dirName(DIRS4[k][0], DIRS4[k][1]); }
+      if (ow.openThree) oOpenThree = true;
+      var xw = windowBest(b, r, c, DIRS4[k][0], DIRS4[k][1], "X");
+      if (xw.four && xLines[k].total < 4 && !xGapFour) { xGapFour = true; xGapDir = dirName(DIRS4[k][0], DIRS4[k][1]); }
+      if (xw.openThree) xOpenThree = true;
+    }
     return {
       oMax: oB.total, oOpen: oB.open, oDir: dirName(DIRS4[oB.idx][0], DIRS4[oB.idx][1]),
       xMax: xB.total, xOpen: xB.open, xDir: dirName(DIRS4[xB.idx][0], DIRS4[xB.idx][1]),
@@ -420,8 +543,26 @@
       xWinDir: xWinIdx >= 0 ? dirName(DIRS4[xWinIdx][0], DIRS4[xWinIdx][1]) : null,
       oThreats: oThreats, xThreats: xThreats,
       doubleO: oThreats >= 2, doubleX: xThreats >= 2,
+      oGapFour: oGapFour, xGapFour: xGapFour, oGapDir: oGapDir, xGapDir: xGapDir,
+      oOpenThree: oOpenThree, xOpenThree: xOpenThree,
+      allowsXWin: null, // filled by 2-ply safety scan in buildLabeledCriteria
+      allowsXForce: null, // filled by 3-ply forced-win scan in buildLabeledCriteria
       dist: nearestDist(b, r, c)
     };
+  }
+
+  function countWinningCellsCapped(b, who, cap) {
+    var n = 0;
+    for (var r = 0; r < SIZE; r++) {
+      for (var c = 0; c < SIZE; c++) {
+        if (b[r][c]) continue;
+        for (var k = 0; k < 4; k++) {
+          if (lineInfo(b, r, c, DIRS4[k][0], DIRS4[k][1], who).total >= WIN) { n++; break; }
+        }
+        if (n >= cap) return n;
+      }
+    }
+    return n;
   }
 
   function findWinningCells(b, who) {
@@ -444,13 +585,19 @@
     if (ev.xWin) return 90000;
     var s = 0;
     if (ev.oMax >= 4) s += 8000 + ev.oOpen * 500;
+    else if (ev.oGapFour) s += 7500; // broken four, e.g. SS_SS — one move from five
     else if (ev.oMax === 3) s += ev.oOpen === 2 ? 4000 : (ev.oOpen === 1 ? 2000 : 500);
     else if (ev.oMax === 2) s += ev.oOpen > 0 ? 400 : 50;
     if (ev.xMax >= 4) s += 7000 + ev.xOpen * 400;
+    else if (ev.xGapFour) s += 6500; // must cover the gap before X does
     else if (ev.xMax === 3) s += ev.xOpen === 2 ? 3500 : (ev.xOpen === 1 ? 1500 : 300);
     else if (ev.xMax === 2) s += ev.xOpen > 0 ? 300 : 30;
+    if (ev.oOpenThree) s += 1200;
+    if (ev.xOpenThree) s += 1000;
     if (ev.doubleO) s += 2500;
     if (ev.doubleX) s += 2000;
+    if (ev.allowsXWin && ev.allowsXWin.length) s -= 20000; // 2-ply safety: hangs an immediate loss
+    if (ev.allowsXForce && ev.allowsXForce.length) s -= 15000; // 3-ply safety: allows a forced win in 2
     if (ev.dist <= 1) s += 200;
     else if (ev.dist === 2) s += 50;
     else s -= 5000; // rule 5: never play far
@@ -470,11 +617,15 @@
     }
     var parts = [];
     if (ev.oMax >= 4) parts.push("creates O open-four " + ev.oDir + " (" + ev.oMax + " in a row)");
+    else if (ev.oGapFour) parts.push("creates O BROKEN four " + ev.oGapDir + " (gap pattern — one move from five)");
     else if (ev.oMax === 3) parts.push("extends O to 3 " + ev.oDir + (ev.oOpen === 2 ? " open both ends" : ""));
     else if (ev.oMax === 2) parts.push("extends O to 2 " + ev.oDir);
     else parts.push("weak for O (only " + ev.oMax + " " + ev.oDir + ")");
+    if (ev.oOpenThree && ev.oMax < 4 && !ev.oGapFour) parts.push("forms O open-three threat");
     if (ev.xMax >= 4) parts.push("BLOCKS X four " + ev.xDir);
+    else if (ev.xGapFour) parts.push("BLOCKS X BROKEN four " + ev.xGapDir + " (covers the gap)");
     else if (ev.xMax >= 3) parts.push("blocks X 3 " + ev.xDir);
+    else if (ev.xOpenThree) parts.push("covers X open-three shape");
     else if (xWins.length) {
       var names = xWins.slice(0, 3).map(function (w) { return w.key; }).join(", ");
       parts.push("does NOT stop X's winning cell(s) at " + names);
@@ -503,7 +654,8 @@
     // Early game (few stones): cands is already small. Late game: sort + cap.
     cands.sort(function (a, b2) { return b2.score - a.score; });
     var picked = cands.slice(0, MAX_OPTIONS);
-    // Guarantee all immediate wins/blocks survive the cap.
+    // Guarantee key cells survive the cap, keeping their natural rank —
+    // wins score as wins (100000/90000), builds keep their candidate score.
     function ensure(list) {
       for (var i = 0; i < list.length; i++) {
         var found = false;
@@ -512,13 +664,79 @@
         }
         if (!found && picked.length < 255) {
           var w = list[i];
-          picked.push({ r: w.r, c: w.c, key: w.key, ev: evalCell(b, w.r, w.c), score: 95000 });
+          if (w.ev) { picked.push(w); continue; }
+          var lev = evalCell(b, w.r, w.c);
+          picked.push({ r: w.r, c: w.c, key: w.key, ev: lev, score: scoreCell(lev) });
         }
       }
     }
     ensure(oWins);
     ensure(xWins);
-    // Re-sort after ensure so the sent order is always strongest-first (#3).
+    // X build-up cells: squares where X is one move from a forcing attack
+    // (four / broken-four / open three). Used for coverage + hint below.
+    function xBuildStrength(ev) {
+      var s = 0;
+      if (ev.xMax >= 4) s += 7000;
+      else if (ev.xGapFour) s += 6500;
+      else if (ev.xMax === 3) s += ev.xOpen === 2 ? 3500 : 1500;
+      if (ev.xOpenThree) s += 1000;
+      return s;
+    }
+    var xBuilds = cands
+      .filter(function (cd) { return xBuildStrength(cd.ev) >= 1500; })
+      .sort(function (a, b2) { return xBuildStrength(b2.ev) - xBuildStrength(a.ev); })
+      .slice(0, 6);
+    ensure(xBuilds);
+    // 2-ply safety: if X already has an immediate win, any O move that does
+    // not block it hangs the loss — demote hard with an explicit label.
+    // (Placing O can only remove X wins, never create them, so when xWins is
+    // empty there is nothing to check.) A winning O move itself is safe.
+    // Cost is ~picked × empties line scans — trivial at 15×15.
+    if (xWins.length) {
+      for (var t = 0; t < picked.length; t++) {
+        var pc = picked[t];
+        if (!pc.ev.oWin && !pc.ev.xWin) {
+          var sim = [];
+          for (var sr = 0; sr < SIZE; sr++) sim.push(b[sr].slice());
+          sim[pc.r][pc.c] = "O";
+          var reply = findWinningCells(sim, "X");
+          if (reply.length) {
+            pc.ev.allowsXWin = reply.slice(0, 3).map(function (w) { return w.key; });
+            pc.score = scoreCell(pc.ev);
+          }
+        }
+      }
+    }
+    // 3-ply safety (the screenshot blunder): no immediate X five, but X may
+    // be one reply away from a FORCED win — a move creating 2+ immediate
+    // winning cells (open four / double threat), which O cannot stop next.
+    // Simulate each O candidate, then each plausible X reply, counting X's
+    // winning cells with early exit at 2. Gated to hot positions only.
+    if (!xWins.length && xBuilds.length) {
+      var replies = cands.slice()
+        .sort(function (a, b2) { return xBuildStrength(b2.ev) - xBuildStrength(a.ev); })
+        .slice(0, 40);
+      for (var u = 0; u < picked.length; u++) {
+        var pu = picked[u];
+        if (pu.ev.oWin || pu.ev.xWin || pu.ev.allowsXWin) continue;
+        var s1 = [];
+        for (var a1 = 0; a1 < SIZE; a1++) s1.push(b[a1].slice());
+        s1[pu.r][pu.c] = "O";
+        var forceVia = null;
+        for (var v = 0; v < replies.length; v++) {
+          if (s1[replies[v].r][replies[v].c]) continue;
+          s1[replies[v].r][replies[v].c] = "X";
+          var nw = countWinningCellsCapped(s1, "X", 2);
+          s1[replies[v].r][replies[v].c] = "";
+          if (nw >= 2) { forceVia = replies[v].key; break; }
+        }
+        if (forceVia) {
+          pu.ev.allowsXForce = [forceVia];
+          pu.score = scoreCell(pu.ev);
+        }
+      }
+    }
+    // Re-sort after ensure + safety scan so the sent order is always strongest-first.
     picked.sort(function (a, b2) { return b2.score - a.score; });
     // Absolute fallback: board full of far cells (should not happen) — take center.
     if (!picked.length) {
@@ -527,21 +745,29 @@
         picked.push({ r: free[f].r, c: free[f].c, key: free[f].key, ev: evalCell(b, free[f].r, free[f].c), score: 0 });
       }
     }
-    // Label with rank + score so Jev sees the order (#3: sorted strongest-first).
+    // Label with rank + score so Jev sees the order (sorted strongest-first).
     var criteria = {};
     for (var p = 0; p < picked.length; p++) {
+      var label = labelCell(picked[p].r, picked[p].c, picked[p].ev, xWins);
+      if (picked[p].ev.allowsXWin && picked[p].ev.allowsXWin.length) {
+        label += "; ALLOWS X WIN at " + picked[p].ev.allowsXWin.join(", ") + " next move — avoid unless winning";
+      }
+      if (picked[p].ev.allowsXForce && picked[p].ev.allowsXForce.length) {
+        label += "; ALLOWS X FORCED WIN via " + picked[p].ev.allowsXForce.join(", ") + " (open-four/double threat in 2) — avoid";
+      }
       criteria[picked[p].key] = "#" + (p + 1) + "/" + picked.length +
-        " score=" + picked[p].score + " — " +
-        labelCell(picked[p].r, picked[p].c, picked[p].ev, xWins);
+        " score=" + picked[p].score + " — " + label;
     }
-    return { criteria: criteria, xWins: xWins, oWins: oWins, picked: picked };
+    return { criteria: criteria, xWins: xWins, oWins: oWins, xBuilds: xBuilds, picked: picked };
   }
 
   // Dynamic per-move hints so Jev enforces win/block HIMSELF (#1 via prompt,
   // not via client override). Returns the full instructions string to send.
   function buildInstructions(analyzed) {
     var s = BASE_INSTRUCTIONS +
-      "\nOptions are sorted strongest-first as #1/N, #2/N… with score=N; prefer the top items unless you see a forced win.";
+      "\nOptions are sorted strongest-first as #1/N, #2/N… with score=N; prefer the top items unless you see a forced win." +
+      " Never play a move labeled ALLOWS X WIN — it loses on the very next move." +
+      " Avoid moves labeled ALLOWS X FORCED WIN — X forces an unstoppable open-four/double threat two moves later.";
     if (analyzed.oWins.length) {
       var ow = analyzed.oWins.map(function (w) { return w.key; }).join(", ");
       s += "\nHINT — YOU CAN WIN NOW: O completes five-in-a-row at " + ow +
@@ -551,6 +777,11 @@
       s += "\nHINT — YOU MUST BLOCK NOW: X will complete five next move at " + xw +
         ". You must choose a BLOCKS X option covering it. Any other move loses immediately." +
         " Options labeled 'does NOT stop X' do NOT save you — ignore symmetry-copying.";
+    } else if (analyzed.xBuilds && analyzed.xBuilds.length) {
+      var xb = analyzed.xBuilds.slice(0, 3).map(function (w) { return w.key; }).join(", ");
+      s += "\nHINT — X is building toward a forcing attack around " + xb +
+        ". Prefer BLOCKS / BROKEN-four options contesting those squares over quiet extensions of your own line." +
+        " Symmetry-copying X elsewhere does NOT stop this — contest the build-up directly.";
     } else {
       s += "\nHINT — no immediate five for either side. Create or block an open-four, or take an intersection of two threats. Stay near stones.";
     }
@@ -592,7 +823,7 @@
       renderStatus({ error: "Missing API key: paste your TypeSafe API key first. No request was sent." });
       return;
     }
-    var model = (modelEl.value || "").trim() || "jev-latest";
+    var model = "jev-latest"; // fixed default; no UI override
 
     var analyzed = buildLabeledCriteria(board);
     var criteria = analyzed.criteria;
@@ -710,13 +941,14 @@
       board[pos.r][pos.c] = "O";
       lastMove = { r: pos.r, c: pos.c, who: "O" };
       lastJevCell = "r" + pos.r + "c" + pos.c;
+      lastJevRC = { r: pos.r, c: pos.c };
       var line = checkWin(board, pos.r, pos.c, "O");
       waiting = false;
       if (line) { winner = "O"; winningLine = line; gameLive = false; }
       else if (boardFull(board)) { winner = "Draw"; gameLive = false; }
       renderStatus({ warn: warn });
       renderTraffic(
-        "Move #" + myExchange + ": Jev chose " + lastJevCell + (lastConfidence != null ? " (confidence " + lastConfidence + ")" : "") + (warn ? " — " + warn : ""),
+        "Move #" + myExchange + ": Jev chose " + lastJevCell + " (" + humanCell(pos.r, pos.c) + ")" + (lastConfidence != null ? " (confidence " + lastConfidence + ")" : "") + (warn ? " — " + warn : ""),
         reqText,
         "choice=" + String(choice) + (lastConfidence != null ? " confidence=" + lastConfidence : "") + "\n\n" + pretty(data)
       );
@@ -760,6 +992,54 @@
   }
 
   // ---- p5 ----
+  // Board geometry: left/top gutter holds the R1–R15 / C1–C15 legends.
+  function boardMetrics() {
+    var L = Math.max(30, Math.floor(window.width * 0.075));
+    var pad = Math.max(8, Math.floor(L * 0.35));
+    var cell = (window.width - L - pad) / SIZE; // cell size from canvas width
+    return { L: L, pad: pad, cell: cell, bs: cell * SIZE };
+  }
+
+  function cellCenter(m, r, c) {
+    return { x: m.L + c * m.cell + m.cell / 2, y: m.L + r * m.cell + m.cell / 2 };
+  }
+
+  function drawStoneX(cx, cy, cell, alpha) {
+    var arm = cell * 0.30;
+    var ctx = window.drawingContext;
+    ctx.save();
+    ctx.globalAlpha = alpha == null ? 1 : alpha;
+    ctx.shadowColor = "rgba(30,27,75,0.45)";
+    ctx.shadowBlur = cell * 0.12;
+    ctx.shadowOffsetY = cell * 0.03;
+    ctx.strokeStyle = "#4f46e5";
+    ctx.lineWidth = cell * 0.13;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(cx - arm, cy - arm); ctx.lineTo(cx + arm, cy + arm);
+    ctx.moveTo(cx + arm, cy - arm); ctx.lineTo(cx - arm, cy + arm);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawStoneO(cx, cy, cell, alpha) {
+    var d = cell * 0.62;
+    var ctx = window.drawingContext;
+    window.noStroke();
+    window.fill(220, 38, 38, Math.round(22 * (alpha == null ? 1 : alpha)));
+    window.ellipse(cx, cy, d, d);
+    ctx.save();
+    ctx.globalAlpha = alpha == null ? 1 : alpha;
+    ctx.shadowColor = "rgba(127,29,29,0.45)";
+    ctx.shadowBlur = cell * 0.12;
+    ctx.shadowOffsetY = cell * 0.03;
+    ctx.strokeStyle = "#dc2626";
+    ctx.lineWidth = cell * 0.12;
+    ctx.beginPath();
+    ctx.arc(cx, cy, d / 2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
   window.setup = function () {
     var w = Math.min(600, window.innerWidth - 32);
     w = Math.max(300, w);
@@ -777,66 +1057,163 @@
 
   window.draw = function () {
     var n = SIZE;
-    var cell = window.width / n;   // cell size derived from canvas width
-    window.background(250);
+    var m = boardMetrics();
+    var cell = m.cell, ox = m.L, oy = m.L, bs = m.bs;
+    var ctx = window.drawingContext;
 
-    // Highlight winning five + last move.
+    // Canvas backdrop.
+    var bg = ctx.createLinearGradient(0, 0, 0, window.height);
+    bg.addColorStop(0, "#f8fafc");
+    bg.addColorStop(1, "#e2e8f0");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, window.width, window.height);
+
+    // Wooden board with soft shadow.
+    ctx.save();
+    ctx.shadowColor = "rgba(15,23,42,0.30)";
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetY = 5;
+    var wood = ctx.createLinearGradient(ox, oy, ox + bs, oy + bs);
+    wood.addColorStop(0, "#f3cd8d");
+    wood.addColorStop(0.55, "#e9b96f");
+    wood.addColorStop(1, "#d9a056");
+    ctx.fillStyle = wood;
+    ctx.fillRect(ox, oy, bs, bs);
+    ctx.restore();
+
+    // Subtle alternating wash for readability.
+    window.noStroke();
+    for (var wr = 0; wr < n; wr++) {
+      for (var wc = 0; wc < n; wc++) {
+        if ((wr + wc) % 2) continue;
+        window.fill(255, 255, 255, 26);
+        window.rect(ox + wc * cell, oy + wr * cell, cell, cell);
+      }
+    }
+
+    // R1–R15 / C1–C15 legends (1-based display; API keys stay r0–r14/c0–c14).
     var winSet = {};
-    for (var i = 0; i < winningLine.length; i++) winSet[winningLine[i].r + ":" + winningLine[i].c] = true;
+    for (var wi = 0; wi < winningLine.length; wi++) winSet[winningLine[wi].r + ":" + winningLine[wi].c] = true;
+    window.noStroke();
+    window.fill(71, 85, 105);
+    window.textStyle(window.BOLD);
+    window.textSize(Math.max(9, cell * 0.30));
+    for (var lr = 0; lr < n; lr++) {
+      window.text("R" + (lr + 1), ox / 2, oy + lr * cell + cell / 2 + 1);
+    }
+    for (var lc = 0; lc < n; lc++) {
+      window.text("C" + (lc + 1), ox + lc * cell + cell / 2, oy / 2);
+    }
+    window.textStyle(window.NORMAL);
 
+    // Last-move wash + winning-five pulse (under the grid).
+    var pulse = 0.5 + 0.5 * Math.sin(window.frameCount * 0.08);
+    window.noStroke();
     for (var r = 0; r < n; r++) {
       for (var c = 0; c < n; c++) {
-        var x = c * cell, y = r * cell;
-        if (winSet[r + ":" + c]) window.fill(172, 230, 172);
-        else if (lastMove && lastMove.r === r && lastMove.c === c) window.fill(255, 235, 150);
-        else window.fill(255);
-        window.stroke(180);
-        window.strokeWeight(1);
-        window.rect(x, y, cell, cell);
-        var v = board[r][c];
-        if (v) {
-          window.noStroke();
-          window.fill(v === "X" ? "#1565c0" : "#c62828");
-          window.textSize(cell * 0.62);
-          window.textStyle(window.BOLD);
-          window.text(v, x + cell / 2, y + cell / 2 + cell * 0.03);
+        var bx = ox + c * cell, by = oy + r * cell;
+        if (winSet[r + ":" + c]) {
+          window.fill(34, 197, 94, Math.round(110 + 90 * pulse));
+          window.rect(bx, by, cell, cell);
+        } else if (lastMove && lastMove.r === r && lastMove.c === c) {
+          window.fill(250, 204, 21, 120);
+          window.rect(bx, by, cell, cell);
         }
       }
     }
-    // Outer border.
-    window.noFill();
-    window.stroke(90);
-    window.strokeWeight(2);
-    window.rect(0, 0, window.width, window.height);
 
-    // Dim overlay while waiting.
+    // Grid lines + star points.
+    window.stroke(122, 72, 18, 160);
+    window.strokeWeight(1);
+    for (var g = 0; g <= n; g++) {
+      window.line(ox + g * cell, oy, ox + g * cell, oy + bs);
+      window.line(ox, oy + g * cell, ox + bs, oy + g * cell);
+    }
+    // Board frame.
+    window.noFill();
+    window.stroke(107, 63, 14);
+    window.strokeWeight(3);
+    window.rect(ox, oy, bs, bs);
+
+    // Hover preview: ghost X on the empty hovered square.
+    var hov = null;
+    try {
+      var cv = document.querySelector("#canvas-holder canvas");
+      if (cv && cv.matches(":hover") && gameLive && !winner && !waiting) {
+        var hc = Math.floor((window.mouseX - ox) / cell);
+        var hr = Math.floor((window.mouseY - oy) / cell);
+        if (inBounds(hr, hc) && !board[hr][hc]) hov = { r: hr, c: hc };
+      }
+    } catch (e) { hov = null; }
+    if (hov) {
+      window.noStroke();
+      window.fill(79, 70, 229, 22);
+      window.rect(ox + hov.c * cell, oy + hov.r * cell, cell, cell);
+    }
+
+    // Stones.
+    for (var sr2 = 0; sr2 < n; sr2++) {
+      for (var sc2 = 0; sc2 < n; sc2++) {
+        var v = board[sr2][sc2];
+        if (!v) continue;
+        var ctr = cellCenter(m, sr2, sc2);
+        if (v === "X") drawStoneX(ctr.x, ctr.y, cell);
+        else drawStoneO(ctr.x, ctr.y, cell);
+      }
+    }
+    if (hov) {
+      var hctr = cellCenter(m, hov.r, hov.c);
+      drawStoneX(hctr.x, hctr.y, cell, 0.35);
+    }
+
+    // Winning strike-through (last move keeps its yellow cell tint above).
+    if (winningLine.length) {
+      var a = cellCenter(m, winningLine[0].r, winningLine[0].c);
+      var z = cellCenter(m, winningLine[winningLine.length - 1].r, winningLine[winningLine.length - 1].c);
+      ctx.save();
+      ctx.shadowColor = "rgba(22,101,52,0.8)";
+      ctx.shadowBlur = 10;
+      ctx.strokeStyle = "rgba(21,128,61," + (0.65 + 0.3 * pulse).toFixed(3) + ")";
+      ctx.lineWidth = Math.max(3, cell * 0.14);
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(z.x, z.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Dim overlay while waiting (board disabled).
     if (waiting) {
       window.noStroke();
-      window.fill(255, 255, 255, 60);
-      window.rect(0, 0, window.width, window.height);
+      window.fill(255, 255, 255, 70);
+      window.rect(ox, oy, bs, bs);
     }
   };
+
+  function canvasCell() {
+    var m = boardMetrics();
+    return {
+      c: Math.floor((window.mouseX - m.L) / m.cell),
+      r: Math.floor((window.mouseY - m.L) / m.cell)
+    };
+  }
 
   window.mousePressed = function () {
     // Only handle clicks inside the canvas.
     if (window.mouseX < 0 || window.mouseY < 0 || window.mouseX >= window.width || window.mouseY >= window.height) return;
-    // Ignore if the click hit a control outside canvas-holder handled by DOM.
-    var cell = window.width / SIZE;
-    var c = Math.floor(window.mouseX / cell);
-    var r = Math.floor(window.mouseY / cell);
-    if (!inBounds(r, c)) return;
-    humanClick(r, c);
+    var pos = canvasCell();
+    if (!inBounds(pos.r, pos.c)) return;
+    humanClick(pos.r, pos.c);
     return false; // prevent default scrolling on touch
   };
 
   // Touch support (p5 forwards touch to mouse by default, but be explicit).
   window.touchStarted = function () {
     if (window.mouseX < 0 || window.mouseY < 0 || window.mouseX >= window.width || window.mouseY >= window.height) return;
-    var cell = window.width / SIZE;
-    var c = Math.floor(window.mouseX / cell);
-    var r = Math.floor(window.mouseY / cell);
-    if (!inBounds(r, c)) return;
-    humanClick(r, c);
+    var pos2 = canvasCell();
+    if (!inBounds(pos2.r, pos2.c)) return;
+    humanClick(pos2.r, pos2.c);
     return false;
   };
 })();
