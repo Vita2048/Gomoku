@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<!--
+  CORS NOTE (please read before local testing):
+  1. This page calls https://api.typesafe.ai directly from the browser via fetch.
+  2. If the API does not send CORS headers, the browser will block the response.
+  3. Do NOT paste your key into any random public CORS proxy to work around this.
+  4. A public proxy would see your Authorization header and could steal your key.
+  5. For local testing only, run a tiny proxy YOU control (e.g. localhost) that
+  6. forwards to api.typesafe.ai and adds Access-Control-Allow-Origin for you.
+  7. Alternatively launch the browser with CORS disabled purely for local tests.
+  8. Never commit, log, or share your key; keep it in memory + password field.
+  9. This file never stores the key in localStorage, cookies, URLs, or logs.
+  10. If fetch fails with a CORS TypeError, check DevTools console (redacted).
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Jef (TypeSafe AI) Tic-Tac-Toe demo</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<style>
+  :root { color-scheme: light; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    margin: 0; padding: 24px;
+    background: #f6f7f9; color: #1a1a1a;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  main { width: 100%; max-width: 1080px; }
+  h1 { margin: 0 0 4px; font-size: 1.6rem; }
+  .subtitle { margin: 0 0 16px; color: #555; }
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;
+    background: #fff; border: 1px solid #ddd; border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 12px;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
+  .field input {
+    padding: 8px 10px; border: 1px solid #bbb; border-radius: 6px;
+    font-size: 0.95rem; min-width: 220px;
+  }
+  button {
+    padding: 9px 14px; border-radius: 6px; border: 1px solid #333;
+    background: #1a1a1a; color: #fff; cursor: pointer; font-size: 0.95rem;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.secondary { background: #fff; color: #1a1a1a; }
+  #status {
+    background: #fff; border: 1px solid #ddd; border-radius: 10px;
+    padding: 10px 14px; margin-bottom: 12px; min-height: 3.2em;
+    font-size: 0.95rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  }
+  #status .err { color: #b00020; }
+  #status .warn { color: #8a5a00; }
+  #canvas-holder { display: flex; justify-content: center; }
+  .game-row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; justify-content: center; }
+  #inspector {
+    flex: 1 1 320px; min-width: 280px; max-width: 440px;
+    background: #fff; border: 1px solid #ddd; border-radius: 10px;
+    padding: 10px 12px; font-size: 0.85rem;
+  }
+  #inspector h2 { margin: 0 0 6px; font-size: 1rem; }
+  #inspector .meta { color: #475569; margin: 8px 0 4px; font-size: 0.8rem; }
+  #inspector pre {
+    background: #0f172a; color: #e2e8f0; padding: 8px; border-radius: 8px;
+    max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+    font-size: 0.72rem; line-height: 1.45; margin: 0;
+  }
+  canvas { border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,0.12); touch-action: manipulation; }
+  .hint { font-size: 0.85rem; color: #666; margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Jef (TypeSafe AI) Tic-Tac-Toe demo</h1>
+  <p class="subtitle">Human player is X, Jev is O, 15&times;15, five in a row</p>
+
+  <div class="controls">
+    <label class="field" for="apiKey">TypeSafe API key
+      <input id="apiKey" type="password" autocomplete="off" placeholder="paste key here" />
+    </label>
+    <label class="field" for="model">Model (optional)
+      <input id="model" type="text" value="jev-latest" autocomplete="off" spellcheck="false" />
+    </label>
+    <button id="newGameBtn" type="button">New Game</button>
+  </div>
+
+  <div id="status" role="status" aria-live="polite">Loading…</div>
+  <div class="game-row">
+    <div id="canvas-holder"></div>
+    <aside id="inspector" aria-label="Jev API traffic">
+      <h2>Jev traffic <span style="font-weight:400;color:#64748b">(key redacted)</span></h2>
+      <div class="meta" id="trafficMeta">No requests yet.</div>
+      <div class="meta">Request &rarr;</div>
+      <pre id="reqPre">—</pre>
+      <div class="meta">Response &larr;</div>
+      <pre id="resPre">—</pre>
+    </aside>
+  </div>
+  
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var SIZE = 15;
+  var WIN = 5;
+  //var API_URL = "https://api.typesafe.ai/v1/systemone";
+  var API_URL = "http://127.0.0.1:8000/systemone";
+
+  var board = [];
+  var gameLive = true;
+  var waiting = false;      // in-flight flag: board disabled while true
+  var winner = null;        // 'X' | 'O' | 'Draw' | null
+  var lastMove = null;      // {r, c, who}
+  var winningLine = [];     // [{r,c}]
+  var statusEl = document.getElementById("status");
+  var apiKeyEl = document.getElementById("apiKey");
+  var modelEl = document.getElementById("model");
+  var newGameBtn = document.getElementById("newGameBtn");
+  var gameId = 0;           // bumped on New Game to ignore stale responses
+  var lastJevCell = null;
+  var lastConfidence = null;
+  var trafficMetaEl = document.getElementById("trafficMeta");
+  var reqPreEl = document.getElementById("reqPre");
+  var resPreEl = document.getElementById("resPre");
+  var exchangeCount = 0;
+
+  function pretty(obj, cap) {
+    var s;
+    try {
+      s = JSON.stringify(obj, null, 2);
+    } catch (e) {
+      s = String(obj);
+    }
+    s = redact(s);
+    cap = cap || 12000;
+    if (s.length > cap) return s.slice(0, cap) + "\n…[truncated " + (s.length - cap) + " chars]";
+    return s;
+  }
+
+  function renderTraffic(meta, reqText, resText) {
+    if (trafficMetaEl) trafficMetaEl.textContent = meta;
+    // textContent (not innerHTML) + redact() => key can never leak into the panel.
+    if (reqPreEl) reqPreEl.textContent = redact(reqText);
+    if (resPreEl) resPreEl.textContent = redact(resText);
+  }
+
+  function emptyBoard() {
+    var b = [];
+    for (var r = 0; r < SIZE; r++) {
+      b.push(new Array(SIZE).fill(""));
+    }
+    return b;
+  }
+  board = emptyBoard();
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (ch) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+    });
+  }
+
+  // Redact Bearer tokens before anything touches the DOM / console.
+  function redact(s) {
+    return String(s == null ? "" : s).replace(/Bearer\s+[A-Za-z0-9._~+\/=\-]+/gi, "Bearer [REDACTED]");
+  }
+
+  function setStatus(html) {
+    statusEl.innerHTML = html;
+  }
+
+  function renderStatus(opts) {
+    opts = opts || {};
+    var turn;
+    if (winner === "X") turn = "Game over — X (you) win!";
+    else if (winner === "O") turn = "Game over — O (Jev) wins.";
+    else if (winner === "Draw") turn = "Game over — draw, board is full.";
+    else if (waiting) turn = "Jev (O) is thinking… board disabled.";
+    else turn = "Your turn (X) — click an empty square.";
+
+    var html = esc(turn);
+    if (lastJevCell) html += "<br>" + esc("Last Jev move: " + lastJevCell + (lastConfidence != null ? " (confidence " + lastConfidence + ")" : ""));
+    if (opts.warn) html += '<br><span class="warn">' + esc(redact(opts.warn)) + "</span>";
+    if (opts.error) html += '<br><span class="err">' + esc(redact(opts.error)) + "</span>";
+    setStatus(html);
+  }
+
+  function newGame() {
+    gameId++;               // invalidate any in-flight response
+    board = emptyBoard();
+    gameLive = true;
+    waiting = false;
+    winner = null;
+    lastMove = null;
+    winningLine = [];
+    lastJevCell = null;
+    lastConfidence = null;
+    // Do NOT clear the API key input (required).
+    renderStatus({});
+    renderTraffic("No requests yet.", "—", "—");
+  }
+
+  newGameBtn.addEventListener("click", newGame);
+
+  function inBounds(r, c) {
+    return r >= 0 && r < SIZE && c >= 0 && c < SIZE;
+  }
+
+  function checkWin(b, r, c, who) {
+    var dirs = [[0, 1], [1, 0], [1, 1], [1, -1]];
+    for (var d = 0; d < dirs.length; d++) {
+      var dr = dirs[d][0], dc = dirs[d][1];
+      var line = [{ r: r, c: c }];
+      var i, nr, nc;
+      for (i = 1; i < WIN; i++) {
+        nr = r + dr * i; nc = c + dc * i;
+        if (!inBounds(nr, nc) || b[nr][nc] !== who) break;
+        line.push({ r: nr, c: nc });
+      }
+      for (i = 1; i < WIN; i++) {
+        nr = r - dr * i; nc = c - dc * i;
+        if (!inBounds(nr, nc) || b[nr][nc] !== who) break;
+        line.unshift({ r: nr, c: nc });
+      }
+      if (line.length >= WIN) {
+        // Return exactly the 5 containing the placed stone (trim longer runs).
+        var idx = -1;
+        for (i = 0; i < line.length; i++) {
+          if (line[i].r === r && line[i].c === c) { idx = i; break; }
+        }
+        var start = Math.max(0, Math.min(idx - (WIN - 1), line.length - WIN));
+        // Prefer a window containing idx.
+        start = Math.max(0, Math.min(idx, line.length - WIN));
+        if (idx - start >= WIN) start = idx - WIN + 1;
+        return line.slice(start, start + WIN);
+      }
+    }
+    return null;
+  }
+
+  function boardFull(b) {
+    for (var r = 0; r < SIZE; r++)
+      for (var c = 0; c < SIZE; c++)
+        if (!b[r][c]) return false;
+    return true;
+  }
+
+  function boardToStrings(b) {
+    var rows = [];
+    for (var r = 0; r < SIZE; r++) {
+      var s = "";
+      for (var c = 0; c < SIZE; c++) s += b[r][c] === "" ? "." : b[r][c];
+      rows.push(s);
+    }
+    return rows;
+  }
+
+  function legalCells(b) {
+    var cells = [];
+    for (var r = 0; r < SIZE; r++)
+      for (var c = 0; c < SIZE; c++)
+        if (!b[r][c]) cells.push({ r: r, c: c, key: "r" + r + "c" + c });
+    return cells;
+  }
+
+  function parseKey(key) {
+    var m = /^r(\d+)c(\d+)$/.exec(String(key || "").trim());
+    if (!m) return null;
+    var r = parseInt(m[1], 10), c = parseInt(m[2], 10);
+    if (!Number.isInteger(r) || !Number.isInteger(c)) return null;
+    if (r < 0 || r > 14 || c < 0 || c > 14) return null;
+    return { r: r, c: c };
+  }
+
+  function getPath(obj, keys) {
+    var cur = obj;
+    for (var i = 0; i < keys.length; i++) {
+      if (cur == null || typeof cur !== "object") return undefined;
+      cur = cur[keys[i]];
+    }
+    return cur;
+  }
+
+  // Robust choice/probabilities/confidence extraction: the documented path is
+  // answers.next_move.choice, but probe nearby shapes without ever logging keys.
+  function extractChoice(data) {
+    var paths = [
+      ["answers", "next_move", "choice"],
+      ["answers", "nextMove", "choice"],
+      ["answer", "next_move", "choice"],
+      ["data", "answers", "next_move", "choice"],
+      ["result", "answers", "next_move", "choice"],
+      ["next_move", "choice"],
+      ["nextMove", "choice"],
+      ["choice"]
+    ];
+    for (var i = 0; i < paths.length; i++) {
+      var v = getPath(data, paths[i]);
+      if (typeof v === "string" && v) return v.trim();
+    }
+    // Alternate field names some APIs use.
+    var altPaths = [
+      ["answers", "next_move", "selected"],
+      ["answers", "next_move", "value"],
+      ["answers", "next_move", "option"],
+      ["answers", "next_move", "key"]
+    ];
+    for (var j = 0; j < altPaths.length; j++) {
+      var w = getPath(data, altPaths[j]);
+      if (typeof w === "string" && w) return w.trim();
+    }
+    return null;
+  }
+
+  function extractProbabilities(data) {
+    var paths = [
+      ["answers", "next_move", "probabilities"],
+      ["answers", "nextMove", "probabilities"],
+      ["next_move", "probabilities"],
+      ["answers", "next_move", "probs"],
+      ["probabilities"]
+    ];
+    for (var i = 0; i < paths.length; i++) {
+      var v = getPath(data, paths[i]);
+      if (v && typeof v === "object") return v;
+    }
+    return null;
+  }
+
+  function extractConfidence(data) {
+    var paths = [
+      ["answers", "next_move", "confidence"],
+      ["answers", "nextMove", "confidence"],
+      ["next_move", "confidence"],
+      ["confidence"]
+    ];
+    for (var i = 0; i < paths.length; i++) {
+      var v = getPath(data, paths[i]);
+      if (typeof v === "number" || typeof v === "string") return v;
+    }
+    return null;
+  }
+
+  // ---- Local tactics: shrink + label options so Jev chooses strongly ----
+  // Hints-first design: the client NEVER plays the win/block itself before the
+  // API call. It only computes hints (winning cells, scores, sorted order) and
+  // puts them into instructions + criteria labels so Jev makes the smart move
+  // himself. Local win>block>best is kept ONLY as a safety net if Jev's reply
+  // is missing/malformed/occupied.
+  var MAX_OPTIONS = 40; // shrink from ~225 empties to top-N tactical candidates
+  var BASE_INSTRUCTIONS = "You are O. One stone only.\nPriority, in order:\n1. Complete five-in-a-row for O this move.\n2. Block a cell where X would complete five next move.\n3. Block or create an open four.\n4. Play on an intersection of two threats.\n5. Never play far from existing stones.\nIgnore symmetry-copying X's line unless it also blocks X.";
+
+  function dirName(dr, dc) {
+    if (dr === 0 && dc === 1) return "horizontal";
+    if (dr === 1 && dc === 0) return "vertical";
+    if (dr === 1 && dc === 1) return "diagonal ↘";
+    return "diagonal ↙";
+  }
+
+  // Count stones of `who` through (r,c) along (dr,dc), assuming (r,c) becomes `who`.
+  function lineInfo(b, r, c, dr, dc, who) {
+    var pos = 0, nr = r + dr, nc = c + dc;
+    while (inBounds(nr, nc) && b[nr][nc] === who) { pos++; nr += dr; nc += dc; }
+    var posOpen = inBounds(nr, nc) && !b[nr][nc];
+    var neg = 0;
+    nr = r - dr; nc = c - dc;
+    while (inBounds(nr, nc) && b[nr][nc] === who) { neg++; nr -= dr; nc -= dc; }
+    var negOpen = inBounds(nr, nc) && !b[nr][nc];
+    return { total: 1 + pos + neg, open: (posOpen ? 1 : 0) + (negOpen ? 1 : 0) };
+  }
+
+  function nearestDist(b, r, c) {
+    var best = 99;
+    for (var rr = 0; rr < SIZE; rr++) {
+      for (var cc = 0; cc < SIZE; cc++) {
+        if (b[rr][cc]) {
+          var d = Math.max(Math.abs(rr - r), Math.abs(cc - c));
+          if (d < best) best = d;
+          if (best <= 1) return best;
+        }
+      }
+    }
+    return best;
+  }
+
+  var DIRS4 = [[0, 1], [1, 0], [1, 1], [1, -1]];
+
+  function evalCell(b, r, c) {
+    var oLines = [], xLines = [], i;
+    for (i = 0; i < 4; i++) {
+      oLines.push(lineInfo(b, r, c, DIRS4[i][0], DIRS4[i][1], "O"));
+      xLines.push(lineInfo(b, r, c, DIRS4[i][0], DIRS4[i][1], "X"));
+    }
+    function best(lines) {
+      var bi = 0;
+      for (var k = 1; k < lines.length; k++) {
+        if (lines[k].total > lines[bi].total ||
+            (lines[k].total === lines[bi].total && lines[k].open > lines[bi].open)) bi = k;
+      }
+      return { idx: bi, total: lines[bi].total, open: lines[bi].open };
+    }
+    var oB = best(oLines), xB = best(xLines);
+    var oWinIdx = -1, xWinIdx = -1, k;
+    for (k = 0; k < 4; k++) {
+      if (oLines[k].total >= WIN && oWinIdx < 0) oWinIdx = k;
+      if (xLines[k].total >= WIN && xWinIdx < 0) xWinIdx = k;
+    }
+    var oThreats = 0, xThreats = 0;
+    for (k = 0; k < 4; k++) {
+      if (oLines[k].total >= 3 && oLines[k].open > 0) oThreats++;
+      if (xLines[k].total >= 3 && xLines[k].open > 0) xThreats++;
+    }
+    return {
+      oMax: oB.total, oOpen: oB.open, oDir: dirName(DIRS4[oB.idx][0], DIRS4[oB.idx][1]),
+      xMax: xB.total, xOpen: xB.open, xDir: dirName(DIRS4[xB.idx][0], DIRS4[xB.idx][1]),
+      oWin: oWinIdx >= 0, xWin: xWinIdx >= 0,
+      oWinDir: oWinIdx >= 0 ? dirName(DIRS4[oWinIdx][0], DIRS4[oWinIdx][1]) : null,
+      xWinDir: xWinIdx >= 0 ? dirName(DIRS4[xWinIdx][0], DIRS4[xWinIdx][1]) : null,
+      oThreats: oThreats, xThreats: xThreats,
+      doubleO: oThreats >= 2, doubleX: xThreats >= 2,
+      dist: nearestDist(b, r, c)
+    };
+  }
+
+  function findWinningCells(b, who) {
+    var out = [];
+    for (var r = 0; r < SIZE; r++) {
+      for (var c = 0; c < SIZE; c++) {
+        if (b[r][c]) continue;
+        var ok = false;
+        for (var k = 0; k < 4; k++) {
+          if (lineInfo(b, r, c, DIRS4[k][0], DIRS4[k][1], who).total >= WIN) { ok = true; break; }
+        }
+        if (ok) out.push({ r: r, c: c, key: "r" + r + "c" + c });
+      }
+    }
+    return out;
+  }
+
+  function scoreCell(ev) {
+    if (ev.oWin) return 100000;
+    if (ev.xWin) return 90000;
+    var s = 0;
+    if (ev.oMax >= 4) s += 8000 + ev.oOpen * 500;
+    else if (ev.oMax === 3) s += ev.oOpen === 2 ? 4000 : (ev.oOpen === 1 ? 2000 : 500);
+    else if (ev.oMax === 2) s += ev.oOpen > 0 ? 400 : 50;
+    if (ev.xMax >= 4) s += 7000 + ev.xOpen * 400;
+    else if (ev.xMax === 3) s += ev.xOpen === 2 ? 3500 : (ev.xOpen === 1 ? 1500 : 300);
+    else if (ev.xMax === 2) s += ev.xOpen > 0 ? 300 : 30;
+    if (ev.doubleO) s += 2500;
+    if (ev.doubleX) s += 2000;
+    if (ev.dist <= 1) s += 200;
+    else if (ev.dist === 2) s += 50;
+    else s -= 5000; // rule 5: never play far
+    return s;
+  }
+
+  function labelCell(r, c, ev, xWins) {
+    var key = "r" + r + "c" + c;
+    if (ev.oWin && ev.xWin) {
+      return "WINS O now AND BLOCKS X: completes five for O " + ev.oWinDir + " at " + key + " — top priority";
+    }
+    if (ev.oWin) {
+      return "WINS O: completes five-in-a-row for O " + ev.oWinDir + " at " + key + " — play here now";
+    }
+    if (ev.xWin) {
+      return "BLOCKS X: X has four " + ev.xWinDir + "; this cell " + key + " is the fifth — must block now";
+    }
+    var parts = [];
+    if (ev.oMax >= 4) parts.push("creates O open-four " + ev.oDir + " (" + ev.oMax + " in a row)");
+    else if (ev.oMax === 3) parts.push("extends O to 3 " + ev.oDir + (ev.oOpen === 2 ? " open both ends" : ""));
+    else if (ev.oMax === 2) parts.push("extends O to 2 " + ev.oDir);
+    else parts.push("weak for O (only " + ev.oMax + " " + ev.oDir + ")");
+    if (ev.xMax >= 4) parts.push("BLOCKS X four " + ev.xDir);
+    else if (ev.xMax >= 3) parts.push("blocks X 3 " + ev.xDir);
+    else if (xWins.length) {
+      var names = xWins.slice(0, 3).map(function (w) { return w.key; }).join(", ");
+      parts.push("does NOT stop X's winning cell(s) at " + names);
+    } else {
+      parts.push("does not need to block X here");
+    }
+    if (ev.doubleO) parts.push("intersection of two O threats");
+    if (ev.doubleX) parts.push("intersection of two X threats");
+    if (ev.dist > 2) parts.push("FAR from stones — avoid per rule 5");
+    return parts.join("; ");
+  }
+
+  // Shrink: keep only near-stone tactical candidates, labeled with WHY.
+  function buildLabeledCriteria(b) {
+    var xWins = findWinningCells(b, "X");
+    var oWins = findWinningCells(b, "O");
+    var cands = [];
+    for (var r = 0; r < SIZE; r++) {
+      for (var c = 0; c < SIZE; c++) {
+        if (b[r][c]) continue;
+        var ev = evalCell(b, r, c);
+        if (ev.dist > 2 && !ev.oWin && !ev.xWin) continue; // shrink far cells (rule 5)
+        cands.push({ r: r, c: c, key: "r" + r + "c" + c, ev: ev, score: scoreCell(ev) });
+      }
+    }
+    // Early game (few stones): cands is already small. Late game: sort + cap.
+    cands.sort(function (a, b2) { return b2.score - a.score; });
+    var picked = cands.slice(0, MAX_OPTIONS);
+    // Guarantee all immediate wins/blocks survive the cap.
+    function ensure(list) {
+      for (var i = 0; i < list.length; i++) {
+        var found = false;
+        for (var j = 0; j < picked.length; j++) {
+          if (picked[j].key === list[i].key) { found = true; break; }
+        }
+        if (!found && picked.length < 255) {
+          var w = list[i];
+          picked.push({ r: w.r, c: w.c, key: w.key, ev: evalCell(b, w.r, w.c), score: 95000 });
+        }
+      }
+    }
+    ensure(oWins);
+    ensure(xWins);
+    // Re-sort after ensure so the sent order is always strongest-first (#3).
+    picked.sort(function (a, b2) { return b2.score - a.score; });
+    // Absolute fallback: board full of far cells (should not happen) — take center.
+    if (!picked.length) {
+      var free = legalCells(b).slice(0, MAX_OPTIONS);
+      for (var f = 0; f < free.length; f++) {
+        picked.push({ r: free[f].r, c: free[f].c, key: free[f].key, ev: evalCell(b, free[f].r, free[f].c), score: 0 });
+      }
+    }
+    // Label with rank + score so Jev sees the order (#3: sorted strongest-first).
+    var criteria = {};
+    for (var p = 0; p < picked.length; p++) {
+      criteria[picked[p].key] = "#" + (p + 1) + "/" + picked.length +
+        " score=" + picked[p].score + " — " +
+        labelCell(picked[p].r, picked[p].c, picked[p].ev, xWins);
+    }
+    return { criteria: criteria, xWins: xWins, oWins: oWins, picked: picked };
+  }
+
+  // Dynamic per-move hints so Jev enforces win/block HIMSELF (#1 via prompt,
+  // not via client override). Returns the full instructions string to send.
+  function buildInstructions(analyzed) {
+    var s = BASE_INSTRUCTIONS +
+      "\nOptions are sorted strongest-first as #1/N, #2/N… with score=N; prefer the top items unless you see a forced win.";
+    if (analyzed.oWins.length) {
+      var ow = analyzed.oWins.map(function (w) { return w.key; }).join(", ");
+      s += "\nHINT — YOU CAN WIN NOW: O completes five-in-a-row at " + ow +
+        ". You must choose one of these WINS O options this move. Do not play anywhere else.";
+    } else if (analyzed.xWins.length) {
+      var xw = analyzed.xWins.map(function (w) { return w.key; }).join(", ");
+      s += "\nHINT — YOU MUST BLOCK NOW: X will complete five next move at " + xw +
+        ". You must choose a BLOCKS X option covering it. Any other move loses immediately." +
+        " Options labeled 'does NOT stop X' do NOT save you — ignore symmetry-copying.";
+    } else {
+      s += "\nHINT — no immediate five for either side. Create or block an open-four, or take an intersection of two threats. Stay near stones.";
+    }
+    return s;
+  }
+
+  function bestLegalFromProbabilities(probs, b) {
+    if (!probs || typeof probs !== "object") return null;
+    var best = null, bestP = -Infinity;
+    function consider(key, p) {
+      var pos = parseKey(key);
+      if (!pos) return;
+      if (b[pos.r][pos.c]) return; // occupied
+      var num = Number(p);
+      if (!isFinite(num)) return;
+      if (num > bestP) { bestP = num; best = pos; }
+    }
+    if (Array.isArray(probs)) {
+      for (var i = 0; i < probs.length; i++) {
+        var e = probs[i];
+        if (e == null) continue;
+        if (typeof e === "string") continue;
+        if (typeof e === "object") {
+          var k = e.key || e.option || e.choice || e.name || e.label;
+          var p = e.probability != null ? e.probability : (e.prob != null ? e.prob : e.p);
+          if (k) consider(k, p);
+        }
+      }
+    } else {
+      Object.keys(probs).forEach(function (k) { consider(k, probs[k]); });
+    }
+    return best;
+  }
+
+  function requestJevMove(myGameId) {
+    var key = apiKeyEl.value; // memory + input only; never stored/logged
+    if (!key || !key.trim()) {
+      waiting = false;
+      renderStatus({ error: "Missing API key: paste your TypeSafe API key first. No request was sent." });
+      return;
+    }
+    var model = (modelEl.value || "").trim() || "jev-latest";
+
+    var analyzed = buildLabeledCriteria(board);
+    var criteria = analyzed.criteria;
+
+    var body = {
+      model: model,
+      state: {
+        game: "15x15 five-in-a-row",
+        win_length: 5,
+        to_move: "O",
+        legend: ". empty, X human, O Jef",
+        board: boardToStrings(board)
+      },
+      questions: {
+        next_move: {
+          type: "choice",
+          instructions: buildInstructions(analyzed),
+          criteria: criteria
+        }
+      }
+    };
+
+    waiting = true;
+    renderStatus({});
+
+    exchangeCount++;
+    var myExchange = exchangeCount;
+    var emptyTotal = legalCells(board).length;
+    var reqText = "POST " + API_URL + "\nAuthorization: Bearer [REDACTED]\nContent-Type: application/json\n\n" + pretty(body);
+    renderTraffic(
+      "Move #" + myExchange + ": sent " + Object.keys(criteria).length + " labeled options (" + emptyTotal + " empties) — waiting for Jev…",
+      reqText,
+      "… waiting for response …"
+    );
+
+    // NOTE: key goes only to API_URL (your localhost proxy, which forwards to
+    // https://api.typesafe.ai). Never send it anywhere else.
+    fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + key,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    }).then(function (resp) {
+      if (!resp.ok) {
+        return resp.text().then(function (t) {
+          throw new Error("API error " + resp.status + " " + resp.statusText + (t ? ": " + t.slice(0, 300) : ""));
+        });
+      }
+      return resp.json();
+    }).then(function (data) {
+      if (myGameId !== gameId) return; // New Game pressed while in flight
+      var warn = null;
+      var choice = extractChoice(data);
+      var probs = extractProbabilities(data);
+      var conf = extractConfidence(data);
+      if (conf != null) lastConfidence = String(conf);
+
+      var pos = choice ? parseKey(choice) : null;
+      if (pos && board[pos.r][pos.c]) {
+        warn = "Jev chose occupied cell " + choice + "; fell back to a legal cell.";
+        pos = null;
+      } else if (choice && !pos) {
+        warn = 'Jev returned malformed choice "' + String(choice).slice(0, 40) + '"; fell back to a legal cell.';
+      } else if (!choice) {
+        warn = "Jev response had no usable choice; fell back to a legal cell.";
+      }
+      // Hints-first: if Jev's own legal choice ignores the hint, keep his move
+      // but surface it — this tells us whether the hints are working.
+      if (pos && !board[pos.r][pos.c]) {
+        var ckey = "r" + pos.r + "c" + pos.c;
+        var inList = function (list) {
+          for (var li = 0; li < list.length; li++) if (list[li].key === ckey) return true;
+          return false;
+        };
+        if (analyzed.oWins.length && !inList(analyzed.oWins)) {
+          warn = (warn ? warn + " " : "") + "Note: Jev ignored WIN hint (" + analyzed.oWins.map(function (w) { return w.key; }).join(", ") + ").";
+        } else if (!analyzed.oWins.length && analyzed.xWins.length && !inList(analyzed.xWins)) {
+          warn = (warn ? warn + " " : "") + "Note: Jev ignored MUST-BLOCK hint (" + analyzed.xWins.map(function (w) { return w.key; }).join(", ") + ").";
+        }
+      }
+
+      if (!pos && probs) {
+        var bp = bestLegalFromProbabilities(probs, board);
+        if (bp) {
+          pos = bp;
+          warn = (warn ? warn + " " : "") + "Used highest-probability legal cell.";
+        }
+      }
+      if (!pos) {
+        // Local tactical fallback (no API trust needed): win > block > best labeled.
+        if (analyzed.oWins.length && !board[analyzed.oWins[0].r][analyzed.oWins[0].c]) {
+          pos = { r: analyzed.oWins[0].r, c: analyzed.oWins[0].c };
+          warn = (warn ? warn + " " : "") + "Fallback: played local winning move " + analyzed.oWins[0].key + ".";
+        } else if (analyzed.xWins.length && !board[analyzed.xWins[0].r][analyzed.xWins[0].c]) {
+          pos = { r: analyzed.xWins[0].r, c: analyzed.xWins[0].c };
+          warn = (warn ? warn + " " : "") + "Fallback: blocked X's win at " + analyzed.xWins[0].key + ".";
+        } else if (analyzed.picked.length) {
+          pos = { r: analyzed.picked[0].r, c: analyzed.picked[0].c };
+          warn = (warn ? warn + " " : "") + "Fallback: played top tactical candidate " + analyzed.picked[0].key + ".";
+        }
+      }
+      if (!pos) {
+        var free = legalCells(board);
+        if (!free.length) {
+          waiting = false; winner = "Draw"; renderStatus({ warn: warn });
+          renderTraffic("Move #" + myExchange + ": board full, draw.", reqText, "choice=" + String(choice) + "\n\n" + pretty(data));
+          return;
+        }
+        pos = free[Math.floor(Math.random() * free.length)];
+        if (!warn) warn = "No probabilities available; played a random legal cell.";
+      }
+
+      board[pos.r][pos.c] = "O";
+      lastMove = { r: pos.r, c: pos.c, who: "O" };
+      lastJevCell = "r" + pos.r + "c" + pos.c;
+      var line = checkWin(board, pos.r, pos.c, "O");
+      waiting = false;
+      if (line) { winner = "O"; winningLine = line; gameLive = false; }
+      else if (boardFull(board)) { winner = "Draw"; gameLive = false; }
+      renderStatus({ warn: warn });
+      renderTraffic(
+        "Move #" + myExchange + ": Jev chose " + lastJevCell + (lastConfidence != null ? " (confidence " + lastConfidence + ")" : "") + (warn ? " — " + warn : ""),
+        reqText,
+        "choice=" + String(choice) + (lastConfidence != null ? " confidence=" + lastConfidence : "") + "\n\n" + pretty(data)
+      );
+    }).catch(function (err) {
+      if (myGameId !== gameId) return;
+      waiting = false;
+      var msg = err && err.message ? err.message : String(err);
+      if (err instanceof TypeError) {
+        msg += " (possible CORS/network block — see note at top of file; use a proxy you control for local testing)";
+      }
+      // Never logs the key: redact before console + DOM.
+      if (typeof console !== "undefined" && console.error) console.error(redact(msg));
+      renderStatus({ error: msg });
+      renderTraffic("Move #" + myExchange + ": request failed.", reqText, "ERROR: " + redact(msg));
+    });
+  }
+
+  function humanClick(r, c) {
+    if (!gameLive || winner) return;
+    if (waiting) return;                    // board disabled while Jev thinks
+    if (!inBounds(r, c) || board[r][c]) return;
+    var key = apiKeyEl.value;
+    if (!key || !key.trim()) {              // refuse to play without a key
+      renderStatus({ error: "Missing API key: paste your TypeSafe API key first. No request was sent." });
+      return;
+    }
+    board[r][c] = "X";
+    lastMove = { r: r, c: c, who: "X" };
+    var line = checkWin(board, r, c, "X");
+    if (line) {
+      winner = "X"; winningLine = line; gameLive = false;
+      renderStatus({});
+      return;
+    }
+    if (boardFull(board)) {
+      winner = "Draw"; gameLive = false;
+      renderStatus({});
+      return;
+    }
+    requestJevMove(gameId);
+  }
+
+  // ---- p5 ----
+  window.setup = function () {
+    var w = Math.min(600, window.innerWidth - 32);
+    w = Math.max(300, w);
+    var cnv = window.createCanvas(w, w);
+    cnv.parent("canvas-holder");
+    window.textAlign(window.CENTER, window.CENTER);
+    renderStatus({});
+  };
+
+  window.windowResized = function () {
+    var w = Math.min(600, window.innerWidth - 32);
+    w = Math.max(300, w);
+    window.resizeCanvas(w, w);
+  };
+
+  window.draw = function () {
+    var n = SIZE;
+    var cell = window.width / n;   // cell size derived from canvas width
+    window.background(250);
+
+    // Highlight winning five + last move.
+    var winSet = {};
+    for (var i = 0; i < winningLine.length; i++) winSet[winningLine[i].r + ":" + winningLine[i].c] = true;
+
+    for (var r = 0; r < n; r++) {
+      for (var c = 0; c < n; c++) {
+        var x = c * cell, y = r * cell;
+        if (winSet[r + ":" + c]) window.fill(172, 230, 172);
+        else if (lastMove && lastMove.r === r && lastMove.c === c) window.fill(255, 235, 150);
+        else window.fill(255);
+        window.stroke(180);
+        window.strokeWeight(1);
+        window.rect(x, y, cell, cell);
+        var v = board[r][c];
+        if (v) {
+          window.noStroke();
+          window.fill(v === "X" ? "#1565c0" : "#c62828");
+          window.textSize(cell * 0.62);
+          window.textStyle(window.BOLD);
+          window.text(v, x + cell / 2, y + cell / 2 + cell * 0.03);
+        }
+      }
+    }
+    // Outer border.
+    window.noFill();
+    window.stroke(90);
+    window.strokeWeight(2);
+    window.rect(0, 0, window.width, window.height);
+
+    // Dim overlay while waiting.
+    if (waiting) {
+      window.noStroke();
+      window.fill(255, 255, 255, 60);
+      window.rect(0, 0, window.width, window.height);
+    }
+  };
+
+  window.mousePressed = function () {
+    // Only handle clicks inside the canvas.
+    if (window.mouseX < 0 || window.mouseY < 0 || window.mouseX >= window.width || window.mouseY >= window.height) return;
+    // Ignore if the click hit a control outside canvas-holder handled by DOM.
+    var cell = window.width / SIZE;
+    var c = Math.floor(window.mouseX / cell);
+    var r = Math.floor(window.mouseY / cell);
+    if (!inBounds(r, c)) return;
+    humanClick(r, c);
+    return false; // prevent default scrolling on touch
+  };
+
+  // Touch support (p5 forwards touch to mouse by default, but be explicit).
+  window.touchStarted = function () {
+    if (window.mouseX < 0 || window.mouseY < 0 || window.mouseX >= window.width || window.mouseY >= window.height) return;
+    var cell = window.width / SIZE;
+    var c = Math.floor(window.mouseX / cell);
+    var r = Math.floor(window.mouseY / cell);
+    if (!inBounds(r, c)) return;
+    humanClick(r, c);
+    return false;
+  };
+})();
+</script>
+</body>
+</html>
