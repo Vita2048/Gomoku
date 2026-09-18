@@ -16,7 +16,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Jef (TypeSafe AI) Tic-Tac-Toe demo</title>
+<title>Jev (TypeSafe AI) Gomoku demo</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
 <style>
   :root {
@@ -132,8 +132,8 @@
     <div class="brand">
       <div class="logo" aria-hidden="true">5◦</div>
       <div>
-        <h1>Jef (TypeSafe AI) Tic-Tac-Toe demo</h1>
-        <p class="subtitle">Human player is X, Jev is O, 15&times;15, five in a row</p>
+        <h1>Jev (TypeSafe AI) Gomoku demo</h1>
+        <p class="subtitle">Human is X, Jev is O. The harness briefs; Jev chooses.</p>
       </div>
     </div>
     <div class="badges">
@@ -155,6 +155,7 @@
   <div id="status" role="status" aria-live="polite">Loading…</div>
   <div class="game-row">
     <section class="board-card">
+      <p class="board-title">Board</p>
       <div id="canvas-holder"></div>
     </section>
     <aside id="inspector" aria-label="Jev API traffic">
@@ -189,14 +190,14 @@
   var newGameBtn = document.getElementById("newGameBtn");
   var gameId = 0;           // bumped on New Game to ignore stale responses
   var lastJevCell = null;
-  var lastJevRC = null; // {r, c} 0-based, for R1–R15 / C1–C15 display
+  var lastJevRC = null; // {r, c} 0-based, shown as R0C0–R14C14
   var lastConfidence = null;
   var trafficMetaEl = document.getElementById("trafficMeta");
   var reqPreEl = document.getElementById("reqPre");
   var resPreEl = document.getElementById("resPre");
   var exchangeCount = 0;
-  var memJev = null;   // previous Jev move key, e.g. "r7c8"
-  var memHuman = null; // previous human move key, e.g. "r8c8"
+  var memJev = null;   // previous Jev move, e.g. "R7C8"
+  var memHuman = null; // previous human move, e.g. "R8C8"
   var memPlan = null;  // previous strategic focus string
 
   function pretty(obj, cap) {
@@ -239,9 +240,9 @@
     return String(s == null ? "" : s).replace(/Bearer\s+[A-Za-z0-9._~+\/=\-]+/gi, "Bearer [REDACTED]");
   }
 
-  // Human-readable square: R1–R15 top→bottom, C1–C15 left→right (1-based).
+  // Square id and user label: R0–R14 top→bottom, C0–C14 left→right (0-based).
   function humanCell(r, c) {
-    return "R" + (r + 1) + " C" + (c + 1);
+    return "R" + r + "C" + c;
   }
 
   function setStatus(html) {
@@ -259,9 +260,9 @@
 
     var html = esc(turn);
     if (lastJevCell) {
-      var hm = lastJevRC ? " (" + humanCell(lastJevRC.r, lastJevRC.c) + ")" : "";
+      var hm =  humanCell(lastJevRC.r, lastJevRC.c);
       var cf = lastConfidence != null ? " (confidence " + lastConfidence + ")" : "";
-      html += "<br>" + esc("Last Jev move: " + lastJevCell + hm + cf);
+      html += "<br>" + esc("Last Jev move: " + hm + cf);
     }
     if (opts.warn) html += '<br><span class="warn">' + esc(redact(opts.warn)) + "</span>";
     if (opts.error) html += '<br><span class="err">' + esc(redact(opts.error)) + "</span>";
@@ -342,16 +343,164 @@
     return rows;
   }
 
+  // Aligned 0-based labeled board for Jev's state (matches on-screen legend).
+  function boardToLabeled(b) {
+    var h = "   ";
+    var c, r;
+    for (c = 0; c < SIZE; c++) h += ("C" + c + "   ").slice(0, 3);
+    var lines = [h];
+    for (r = 0; r < SIZE; r++) {
+      var row = ("R" + r + "  ").slice(0, 3);
+      for (c = 0; c < SIZE; c++) row += (b[r][c] || ".") + "  ";
+      lines.push(row);
+    }
+    return lines.join("\n");
+  }
+
+  function collectLine(b, r0, c0, dr, dc) {
+    var cells = [];
+    var r = r0, c = c0;
+    while (inBounds(r, c)) {
+      cells.push({ r: r, c: c, v: b[r][c] || "." });
+      r += dr;
+      c += dc;
+    }
+    return cells;
+  }
+
+  function allBoardLines(b) {
+    var lines = [];
+    var r, c;
+    for (r = 0; r < SIZE; r++) lines.push({ dir: "horizontal", cells: collectLine(b, r, 0, 0, 1) });
+    for (c = 0; c < SIZE; c++) lines.push({ dir: "vertical", cells: collectLine(b, 0, c, 1, 0) });
+    for (r = 0; r < SIZE; r++) lines.push({ dir: "diagonal ↘", cells: collectLine(b, r, 0, 1, 1) });
+    for (c = 1; c < SIZE; c++) lines.push({ dir: "diagonal ↘", cells: collectLine(b, 0, c, 1, 1) });
+    for (r = 0; r < SIZE; r++) lines.push({ dir: "diagonal ↙", cells: collectLine(b, r, SIZE - 1, 1, -1) });
+    for (c = SIZE - 2; c >= 0; c--) lines.push({ dir: "diagonal ↙", cells: collectLine(b, 0, c, 1, -1) });
+    return lines;
+  }
+
+  function formatCells(cells) {
+    return cells.map(function (p) {
+      return humanCell(p.r, p.c) + "=" + (p.v || ".");
+    }).join(" ");
+  }
+
+  function windowThrough(b, r, c, dr, dc, rad) {
+    var parts = [];
+    for (var k = -rad; k <= rad; k++) {
+      var nr = r + dr * k, nc = c + dc * k;
+      if (!inBounds(nr, nc)) { parts.push("#"); continue; }
+      var v = b[nr][nc] || ".";
+      if (k === 0) v = "(" + v + ")";
+      parts.push(humanCell(nr, nc) + "=" + v);
+    }
+    return parts.join(" ");
+  }
+
+  function linesThroughStone(b, r, c) {
+    return [
+      "horizontal  " + windowThrough(b, r, c, 0, 1, 5),
+      "vertical    " + windowThrough(b, r, c, 1, 0, 5),
+      "diagonal ↘  " + windowThrough(b, r, c, 1, 1, 5),
+      "diagonal ↙  " + windowThrough(b, r, c, 1, -1, 5)
+    ];
+  }
+
+  function winPattern(b, r, c, who) {
+    for (var k = 0; k < 4; k++) {
+      var dr = DIRS4[k][0], dc = DIRS4[k][1];
+      if (lineInfo(b, r, c, dr, dc, who).total < WIN) continue;
+      var cells = [];
+      var i, nr, nc;
+      for (i = -4; i <= 4; i++) {
+        nr = r + dr * i;
+        nc = c + dc * i;
+        if (!inBounds(nr, nc)) continue;
+        cells.push({ r: nr, c: nc, v: (i === 0 ? "." : (b[nr][nc] || ".")) });
+      }
+      return dirName(dr, dc) + "  " + formatCells(cells);
+    }
+    return null;
+  }
+
+  // Named live/dead lines. This is the briefing Jev should trust over the crowd.
+  function scanThreatLedger(b) {
+    var xFives = [], oFives = [], xLive = [], oLive = [], xRush = [], oRush = [];
+    var xThrees = [], oThrees = [], xSleep = [], oSleep = [], dead = [];
+    var seen = {};
+    function mark(kind, who, dir, a, z, extra) {
+      var id = kind + who + dir + a.r + "," + a.c + "-" + z.r + "," + z.c;
+      if (seen[id]) return;
+      seen[id] = 1;
+      var rec = { kind: kind, who: who, dir: dir, a: a, z: z, extra: extra || "" };
+      if (kind === "five") (who === "X" ? xFives : oFives).push(rec);
+      else if (kind === "live-four") (who === "X" ? xLive : oLive).push(rec);
+      else if (kind === "rush-four") (who === "X" ? xRush : oRush).push(rec);
+      else if (kind === "live-three") (who === "X" ? xThrees : oThrees).push(rec);
+      else if (kind === "sleep-three") (who === "X" ? xSleep : oSleep).push(rec);
+      else if (kind === "dead-four") dead.push(rec);
+    }
+    var lines = allBoardLines(b);
+    var li, whoi, who, cells, i, j, len, leftOpen, rightOpen, leftCell, rightCell;
+    for (li = 0; li < lines.length; li++) {
+      cells = lines[li].cells;
+      for (whoi = 0; whoi < 2; whoi++) {
+        who = whoi ? "X" : "O";
+        i = 0;
+        while (i < cells.length) {
+          if (cells[i].v !== who) { i++; continue; }
+          j = i;
+          while (j < cells.length && cells[j].v === who) j++;
+          len = j - i;
+          leftOpen = i > 0 && cells[i - 1].v === ".";
+          rightOpen = j < cells.length && cells[j].v === ".";
+          leftCell = leftOpen ? cells[i - 1] : null;
+          rightCell = rightOpen ? cells[j] : null;
+          if (len >= 5) mark("five", who, lines[li].dir, cells[i], cells[j - 1], "already on board");
+          else if (len === 4 && leftOpen && rightOpen) {
+            mark("live-four", who, lines[li].dir, cells[i], cells[j - 1],
+              "open ends " + humanCell(leftCell.r, leftCell.c) + " and " + humanCell(rightCell.r, rightCell.c));
+          } else if (len === 4 && (leftOpen || rightOpen)) {
+            var end = leftCell || rightCell;
+            mark("rush-four", who, lines[li].dir, cells[i], cells[j - 1],
+              "block " + humanCell(end.r, end.c));
+          } else if (len === 4) {
+            mark("dead-four", who, lines[li].dir, cells[i], cells[j - 1], "both ends blocked — ignore");
+          } else if (len === 3 && leftOpen && rightOpen) {
+            mark("live-three", who, lines[li].dir, cells[i], cells[j - 1],
+              "ends " + humanCell(leftCell.r, leftCell.c) + ", " + humanCell(rightCell.r, rightCell.c));
+          } else if (len === 3 && (leftOpen || rightOpen)) {
+            var openEnd = leftCell || rightCell;
+            mark("sleep-three", who, lines[li].dir, cells[i], cells[j - 1],
+              "open at " + humanCell(openEnd.r, openEnd.c) + " — one stone makes a rush four");
+          }
+          i = j;
+        }
+      }
+    }
+    return {
+      xFives: xFives, oFives: oFives, xLive: xLive, oLive: oLive,
+      xRush: xRush, oRush: oRush, xThrees: xThrees, oThrees: oThrees,
+      xSleep: xSleep, oSleep: oSleep, dead: dead
+    };
+  }
+
+  function ledgerLine(rec) {
+    return rec.dir + " " + humanCell(rec.a.r, rec.a.c) + "–" + humanCell(rec.z.r, rec.z.c) +
+      (rec.extra ? " (" + rec.extra + ")" : "");
+  }
+
   function legalCells(b) {
     var cells = [];
     for (var r = 0; r < SIZE; r++)
       for (var c = 0; c < SIZE; c++)
-        if (!b[r][c]) cells.push({ r: r, c: c, key: "r" + r + "c" + c });
+        if (!b[r][c]) cells.push({ r: r, c: c, key: humanCell(r, c) });
     return cells;
   }
 
   function parseKey(key) {
-    var m = /^r(\d+)c(\d+)$/.exec(String(key || "").trim());
+    var m = /^r(\d+)c(\d+)$/i.exec(String(key || "").trim());
     if (!m) return null;
     var r = parseInt(m[1], 10), c = parseInt(m[2], 10);
     if (!Number.isInteger(r) || !Number.isInteger(c)) return null;
@@ -428,14 +577,13 @@
     return null;
   }
 
-  // ---- Local tactics: shrink + label options so Jev chooses strongly ----
-  // Hints-first design: the client NEVER plays the win/block itself before the
-  // API call. It only computes hints (winning cells, scores, sorted order) and
-  // puts them into instructions + criteria labels so Jev makes the smart move
-  // himself. Local win>block>best is kept ONLY as a safety net if Jev's reply
-  // is missing/malformed/occupied.
-  var MAX_OPTIONS = 40; // shrink from ~225 empties to top-N tactical candidates
-  var BASE_INSTRUCTIONS = "You are O. One stone only.\n\nDecision protocol:\n1. Play a winning move if available.\n2. Otherwise block any immediate X win.\n3. Otherwise create or block an open four.\n4. Prefer forks (two simultaneous threats).\n5. Stay near existing stones.\n6. Ignore symmetry unless it prevents a threat.";
+  // ---- Briefing layer: the harness analyzes, Jev decides ----
+  // Local tactics write a coach-style prompt (ledger, line scans, contrastive
+  // labels). Jev's listed choice is always played. Fallback is only for
+  // missing/malformed/occupied replies — never to "fix" a legal ignore.
+  var MAX_OPTIONS = 12;
+  var MAX_TRAPS = 4;
+  var BASE_INSTRUCTIONS = "You are Jev, playing O in five-in-a-row (Gomoku) on a 15×15 board. Place exactly one stone.\n\nCoordinates are 0-based and match the board legend: R0C0 is top-left, R14C14 is bottom-right. Option keys are R{row}C{col}.\n\nThe threat ledger below is computed and correct. Trust it over how busy the center looks. A live three on the edge of the group beats a blocked four in the crowd.\n\nDecision protocol:\n1. If any option WINS O now, pick it.\n2. If any option is MUST BLOCK, pick one of those keys. Any other key loses immediately.\n3. Never pick a key whose label starts with LOSES.\n4. Stop X live fours, then live threes — including on the flank.\n5. Ignore lines marked DEAD (both ends blocked; a five cannot fit).\n6. Prefer forks (two threats at once).\n7. Stay near existing stones.";
 
   function dirName(dr, dc) {
     if (dr === 0 && dc === 1) return "horizontal";
@@ -505,70 +653,121 @@
 
   var DIRS4 = [[0, 1], [1, 0], [1, 1], [1, -1]];
 
-  function evalCell(b, r, c) {
-    var oLines = [], xLines = [], i;
-    for (i = 0; i < 4; i++) {
-      oLines.push(lineInfo(b, r, c, DIRS4[i][0], DIRS4[i][1], "O"));
-      xLines.push(lineInfo(b, r, c, DIRS4[i][0], DIRS4[i][1], "X"));
+  function uniquePts(pts) {
+    var seen = {}, out = [];
+    for (var i = 0; i < pts.length; i++) {
+      var k = pts[i].r + "," + pts[i].c;
+      if (!seen[k]) { seen[k] = 1; out.push(pts[i]); }
     }
-    function best(lines) {
-      var bi = 0;
-      for (var k = 1; k < lines.length; k++) {
-        if (lines[k].total > lines[bi].total ||
-            (lines[k].total === lines[bi].total && lines[k].open > lines[bi].open)) bi = k;
+    return out;
+  }
+
+  // 5-windows through (r,c) on one line. Empty cells that complete a five
+  // (board already has `who` at r,c). Opponent/wall windows are skipped, so
+  // blocked "fours" that can never become five score as dead.
+  function winPointsDir(b, r, c, dr, dc, who) {
+    var pts = [];
+    for (var t = 0; t < 5; t++) {
+      var empty = null, stones = 0, ok = true;
+      for (var j = 0; j < 5; j++) {
+        var nr = r + (j - t) * dr, nc = c + (j - t) * dc;
+        if (!inBounds(nr, nc)) { ok = false; break; }
+        var v = b[nr][nc];
+        if (v === who) stones++;
+        else if (!v) {
+          if (empty) { ok = false; break; }
+          empty = { r: nr, c: nc };
+        } else { ok = false; break; }
       }
-      return { idx: bi, total: lines[bi].total, open: lines[bi].open };
+      if (!ok) continue;
+      if (stones === 4 && empty) pts.push(empty);
     }
-    var oB = best(oLines), xB = best(xLines);
-    var oWinIdx = -1, xWinIdx = -1, k;
-    for (k = 0; k < 4; k++) {
-      if (oLines[k].total >= WIN && oWinIdx < 0) oWinIdx = k;
-      if (xLines[k].total >= WIN && xWinIdx < 0) xWinIdx = k;
+    return uniquePts(pts);
+  }
+
+  // Classify placing `who` at empty (r,c): five / live four / rush four /
+  // live three / sleep three. Live four = two or more distinct winning replies
+  // (.XXXX.). Rush four = exactly one. Live three = a follow-up on the same
+  // line that would create a live four.
+  function classifyPlace(b, r, c, who) {
+    var prev = b[r][c];
+    b[r][c] = who;
+    var five = false, fiveDir = null;
+    var liveFour = false, rushFour = false, brokenFour = false;
+    var liveThreeDirs = 0, sleepThreeDirs = 0, threatDirs = 0;
+    var maxRun = 1, openEnds = 0, bestDir = dirName(0, 1);
+    for (var k = 0; k < 4; k++) {
+      var dr = DIRS4[k][0], dc = DIRS4[k][1];
+      var ro = lineInfo(b, r, c, dr, dc, who);
+      if (ro.total > maxRun || (ro.total === maxRun && ro.open > openEnds)) {
+        maxRun = ro.total;
+        openEnds = ro.open;
+        bestDir = dirName(dr, dc);
+      }
+      if (ro.total >= WIN) {
+        five = true;
+        if (!fiveDir) fiveDir = dirName(dr, dc);
+      }
+      var wpts = winPointsDir(b, r, c, dr, dc, who);
+      var live4 = wpts.length >= 2;
+      var rush4 = wpts.length === 1;
+      if (live4) liveFour = true;
+      if (rush4) rushFour = true;
+      if ((live4 || rush4) && ro.total < 4) brokenFour = true;
+      var live3 = false, sleep3 = false;
+      if (!five && !live4 && !rush4) {
+        for (var step = -4; step <= 4; step++) {
+          if (step === 0) continue;
+          var er = r + dr * step, ec = c + dc * step;
+          if (!inBounds(er, ec) || b[er][ec]) continue;
+          b[er][ec] = who;
+          var w2 = winPointsDir(b, er, ec, dr, dc, who);
+          b[er][ec] = "";
+          if (w2.length >= 2) { live3 = true; break; }
+          if (w2.length === 1) sleep3 = true;
+        }
+      }
+      if (live3) liveThreeDirs++;
+      else if (sleep3) sleepThreeDirs++;
+      if (live4 || rush4 || live3) threatDirs++;
     }
-    var oThreats = 0, xThreats = 0;
-    for (k = 0; k < 4; k++) {
-      if (oLines[k].total >= 3 && oLines[k].open > 0) oThreats++;
-      if (xLines[k].total >= 3 && xLines[k].open > 0) xThreats++;
-    }
-    // Gap-pattern vision per direction (broken fours, open threes with a gap).
-    var oGapFour = false, xGapFour = false, oOpenThree = false, xOpenThree = false;
-    var oGapDir = null, xGapDir = null;
-    for (k = 0; k < 4; k++) {
-      var ow = windowBest(b, r, c, DIRS4[k][0], DIRS4[k][1], "O");
-      if (ow.four && oLines[k].total < 4 && !oGapFour) { oGapFour = true; oGapDir = dirName(DIRS4[k][0], DIRS4[k][1]); }
-      if (ow.openThree) oOpenThree = true;
-      var xw = windowBest(b, r, c, DIRS4[k][0], DIRS4[k][1], "X");
-      if (xw.four && xLines[k].total < 4 && !xGapFour) { xGapFour = true; xGapDir = dirName(DIRS4[k][0], DIRS4[k][1]); }
-      if (xw.openThree) xOpenThree = true;
-    }
+    b[r][c] = prev;
     return {
-      oMax: oB.total, oOpen: oB.open, oDir: dirName(DIRS4[oB.idx][0], DIRS4[oB.idx][1]),
-      xMax: xB.total, xOpen: xB.open, xDir: dirName(DIRS4[xB.idx][0], DIRS4[xB.idx][1]),
-      oWin: oWinIdx >= 0, xWin: xWinIdx >= 0,
-      oWinDir: oWinIdx >= 0 ? dirName(DIRS4[oWinIdx][0], DIRS4[oWinIdx][1]) : null,
-      xWinDir: xWinIdx >= 0 ? dirName(DIRS4[xWinIdx][0], DIRS4[xWinIdx][1]) : null,
-      oThreats: oThreats, xThreats: xThreats,
-      doubleO: oThreats >= 2, doubleX: xThreats >= 2,
-      oGapFour: oGapFour, xGapFour: xGapFour, oGapDir: oGapDir, xGapDir: xGapDir,
-      oOpenThree: oOpenThree, xOpenThree: xOpenThree,
-      allowsXWin: null, // filled by 2-ply safety scan in buildLabeledCriteria
-      allowsXForce: null, // filled by 3-ply forced-win scan in buildLabeledCriteria
-      dist: nearestDist(b, r, c)
+      five: five,
+      fiveDir: fiveDir,
+      liveFour: liveFour,
+      rushFour: rushFour,
+      brokenFour: brokenFour,
+      liveThree: liveThreeDirs > 0,
+      liveThreeCount: liveThreeDirs,
+      sleepThree: sleepThreeDirs > 0,
+      threatDirs: threatDirs,
+      maxRun: maxRun,
+      openEnds: openEnds,
+      bestDir: bestDir,
+      fork: threatDirs >= 2
     };
   }
 
-  function countWinningCellsCapped(b, who, cap) {
-    var n = 0;
-    for (var r = 0; r < SIZE; r++) {
-      for (var c = 0; c < SIZE; c++) {
-        if (b[r][c]) continue;
-        for (var k = 0; k < 4; k++) {
-          if (lineInfo(b, r, c, DIRS4[k][0], DIRS4[k][1], who).total >= WIN) { n++; break; }
-        }
-        if (n >= cap) return n;
-      }
-    }
-    return n;
+  function evalCell(b, r, c) {
+    var o = classifyPlace(b, r, c, "O");
+    var x = classifyPlace(b, r, c, "X");
+    return {
+      oMax: o.maxRun, oOpen: o.openEnds, oDir: o.bestDir,
+      xMax: x.maxRun, xOpen: x.openEnds, xDir: x.bestDir,
+      oWin: o.five, xWin: x.five,
+      oWinDir: o.fiveDir, xWinDir: x.fiveDir,
+      oThreats: o.threatDirs, xThreats: x.threatDirs,
+      doubleO: o.fork, doubleX: x.fork,
+      oGapFour: o.brokenFour, xGapFour: x.brokenFour,
+      oOpenThree: o.liveThree, xOpenThree: x.liveThree,
+      oLiveFour: o.liveFour, xLiveFour: x.liveFour,
+      oRushFour: o.rushFour, xRushFour: x.rushFour,
+      oLiveThreeCount: o.liveThreeCount, xLiveThreeCount: x.liveThreeCount,
+      allowsXWin: null,
+      allowsXForce: null,
+      dist: nearestDist(b, r, c)
+    };
   }
 
   function findWinningCells(b, who) {
@@ -580,74 +779,88 @@
         for (var k = 0; k < 4; k++) {
           if (lineInfo(b, r, c, DIRS4[k][0], DIRS4[k][1], who).total >= WIN) { ok = true; break; }
         }
-        if (ok) out.push({ r: r, c: c, key: "r" + r + "c" + c });
+        if (ok) out.push({ r: r, c: c, key: humanCell(r, c) });
       }
     }
     return out;
+  }
+
+  // After O has already moved (X to play): a single X stone that wins now,
+  // makes a live four, makes a four-three, or makes two live threes.
+  function xForcedAfter(b) {
+    for (var r = 0; r < SIZE; r++) {
+      for (var c = 0; c < SIZE; c++) {
+        if (b[r][c]) continue;
+        if (nearestDist(b, r, c) > 2) continue;
+        var cl = classifyPlace(b, r, c, "X");
+        var key = humanCell(r, c);
+        if (cl.five) return { kind: "five", key: key };
+        if (cl.liveFour) return { kind: "live-four", key: key };
+        if (cl.rushFour && cl.liveThree) return { kind: "four-three", key: key };
+        if (cl.liveThreeCount >= 2) return { kind: "three-three", key: key };
+      }
+    }
+    return null;
   }
 
   function scoreCell(ev) {
     if (ev.oWin) return 100000;
     if (ev.xWin) return 90000;
     var s = 0;
-    if (ev.oMax >= 4) s += 8000 + ev.oOpen * 500;
-    else if (ev.oGapFour) s += 7500; // broken four, e.g. SS_SS — one move from five
-    else if (ev.oMax === 3) s += ev.oOpen === 2 ? 4000 : (ev.oOpen === 1 ? 2000 : 500);
-    else if (ev.oMax === 2) s += ev.oOpen > 0 ? 400 : 50;
-    if (ev.xMax >= 4) s += 7000 + ev.xOpen * 400;
-    else if (ev.xGapFour) s += 6500; // must cover the gap before X does
-    else if (ev.xMax === 3) s += ev.xOpen === 2 ? 3500 : (ev.xOpen === 1 ? 1500 : 300);
-    else if (ev.xMax === 2) s += ev.xOpen > 0 ? 300 : 30;
-    if (ev.oOpenThree) s += 1200;
-    if (ev.xOpenThree) s += 1000;
-    if (ev.doubleO) s += 2500;
-    if (ev.doubleX) s += 2000;
-    if (ev.allowsXWin && ev.allowsXWin.length) s -= 20000; // 2-ply safety: hangs an immediate loss
-    if (ev.allowsXForce && ev.allowsXForce.length) s -= 15000; // 3-ply safety: allows a forced win in 2
+    // Live four = two winning replies; rush/broken four = one. Closed fours that
+    // cannot become five are not counted by classifyPlace, so they stay quiet.
+    if (ev.oLiveFour) s += 25000;
+    else if (ev.oRushFour || ev.oGapFour) s += 12000;
+    else if (ev.oOpenThree) s += 5000;
+    else if (ev.oMax === 3) s += ev.oOpen === 2 ? 2000 : 800;
+    else if (ev.oMax === 2 && ev.oOpen > 0) s += 400;
+    if (ev.xLiveFour) s += 22000;
+    else if (ev.xRushFour || ev.xGapFour) s += 11000;
+    else if (ev.xOpenThree) s += 4500;
+    else if (ev.xMax === 3) s += ev.xOpen === 2 ? 1800 : 600;
+    else if (ev.xMax === 2 && ev.xOpen > 0) s += 300;
+    if (ev.doubleO) s += 8000;
+    if (ev.doubleX) s += 7000;
+    if (ev.allowsXWin && ev.allowsXWin.length) s -= 20000;
+    if (ev.allowsXForce && ev.allowsXForce.length) s -= 15000;
     if (ev.dist <= 1) s += 200;
     else if (ev.dist === 2) s += 50;
-    else s -= 5000; // rule 5: never play far
+    else s -= 5000;
     return s;
   }
 
   // Tactical tiers for presentation. Numeric scores stay internal (sort only):
-  // S = forced win/block, A = critical four-level/fork, B = three-level, C = positional.
+  // S = forced win/block, A = live/rush four or fork, B = live three, C = rest.
   function tierOf(ev) {
     if (ev.oWin || ev.xWin) return "S";
-    if (ev.oMax >= 4 || ev.oGapFour || ev.xMax >= 4 || ev.xGapFour || ev.doubleO || ev.doubleX) return "A";
-    if (ev.oMax === 3 || ev.xMax === 3 || ev.oOpenThree || ev.xOpenThree) return "B";
+    if (ev.oLiveFour || ev.xLiveFour || ev.oRushFour || ev.xRushFour ||
+        ev.oGapFour || ev.xGapFour || ev.doubleO || ev.doubleX) return "A";
+    if (ev.oOpenThree || ev.xOpenThree || ev.oMax === 3 || ev.xMax === 3) return "B";
     return "C";
   }
 
   // One-line tactical description. Avoid-moves are relabeled by the caller.
   function labelCell(r, c, ev) {
-    if (ev.oWin && ev.xWin) return "WINS O now and BLOCKS X win";
-    if (ev.oWin) return "WINS O now";
-    if (ev.xWin) return "BLOCKS X win";
-    // Weight each side the way scores do, then label the stronger one.
-    var oW = ev.oMax >= 4 ? 4 : ev.oGapFour ? 3.6 : (ev.oMax === 3 && ev.oOpen === 2) || ev.oOpenThree ? 3 : ev.oMax === 3 ? 2 : ev.oMax === 2 ? 1 : 0;
-    var xW = ev.xMax >= 4 ? 3.8 : ev.xGapFour ? 3.4 : (ev.xMax === 3 && ev.xOpen === 2) || ev.xOpenThree ? 2.8 : ev.xMax === 3 ? 1.8 : ev.xMax === 2 ? 0.8 : 0;
-    if (ev.doubleO && oW < 3) oW = 3.2; // a fork outranks a lone three
-    if (ev.doubleX && xW < 3) xW = 3.0;
-    var s;
-    if (oW >= xW && oW > 0) {
-      if (ev.oMax >= 4) s = "Creates open four";
-      else if (ev.oGapFour) s = "Creates broken four";
-      else if ((ev.oMax === 3 && ev.oOpen === 2) || ev.oOpenThree) s = "Creates open three";
-      else if (ev.oMax === 3) s = "Extends O three";
-      else s = "Extends O two";
-      if (ev.doubleO) s += " + fork";
-    } else if (xW > 0) {
-      if (ev.xMax >= 4) s = "Blocks open four";
-      else if (ev.xGapFour) s = "Blocks broken four";
-      else if ((ev.xMax === 3 && ev.xOpen === 2) || ev.xOpenThree) s = "Blocks open three";
-      else if (ev.xMax === 3) s = "Blocks X three";
-      else s = "Covers X two";
-      if (ev.doubleX) s += " + fork";
-    } else {
-      s = "Positional move";
+    if (ev.oWin && ev.xWin) return "WINS O now and MUST BLOCK X five";
+    if (ev.oWin) return "WINS O now — take this";
+    if (ev.xWin) return "MUST BLOCK X five on " + (ev.xWinDir || "this line") + ". Any other key loses immediately.";
+    var parts = [];
+    if (ev.oLiveFour) parts.push("Creates LIVE four (forced)");
+    if (ev.xLiveFour) parts.push("Stops X live three (prevents live four)");
+    if (ev.oRushFour && !ev.oLiveFour) parts.push(ev.oGapFour ? "Creates broken four" : "Creates rush four");
+    else if (ev.oGapFour && !ev.oLiveFour) parts.push("Creates broken four");
+    if (ev.xRushFour && !ev.xLiveFour) parts.push(ev.xGapFour ? "Blocks X broken four" : "Blocks X rush four");
+    else if (ev.xGapFour && !ev.xLiveFour) parts.push("Blocks X broken four");
+    if (ev.doubleO) parts.push("O fork");
+    if (ev.doubleX) parts.push("blocks X fork");
+    if (ev.oOpenThree && !ev.oLiveFour && !ev.oRushFour) parts.push("Creates live three");
+    if (ev.xOpenThree && !ev.xLiveFour && !ev.xRushFour) parts.push("Blocks X live three");
+    if (!parts.length) {
+      if (ev.oMax >= 3) parts.push("Extends O");
+      else if (ev.xMax >= 3) parts.push("Covers X");
+      else parts.push("Positional move");
     }
-    return s;
+    return parts.join(" + ");
   }
 
   // ---- Presentation layer: summary, PV, tiers (analysis above is untouched) ----
@@ -686,7 +899,7 @@
         if (b[r][c]) continue;
         if (nearestDist(b, r, c) > 2) continue;
         var s = attackStrength(b, r, c, who);
-        if (!best || s > best.s) best = { r: r, c: c, key: "r" + r + "c" + c, s: s };
+        if (!best || s > best.s) best = { r: r, c: c, key: humanCell(r, c), s: s };
       }
     }
     return best;
@@ -713,7 +926,7 @@
       " — O " + levelName(oS) + " vs X " + levelName(xr.s) + ", " + res + ".";
   }
 
-  // 1-based critical-area box, e.g. "R7–R9, C6–C9".
+  // 0-based critical-area box, e.g. "R6–R8, C5–C8".
   function bboxArea(cells) {
     if (!cells.length) return null;
     var r0 = 99, r1 = -1, c0 = 99, c1 = -1, i;
@@ -723,8 +936,8 @@
       if (cells[i].c < c0) c0 = cells[i].c;
       if (cells[i].c > c1) c1 = cells[i].c;
     }
-    var rs = r0 === r1 ? "R" + (r0 + 1) : "R" + (r0 + 1) + "–R" + (r1 + 1);
-    var cs = c0 === c1 ? "C" + (c0 + 1) : "C" + (c0 + 1) + "–C" + (c1 + 1);
+    var rs = r0 === r1 ? "R" + r0 : "R" + r0 + "–R" + r1;
+    var cs = c0 === c1 ? "C" + c0 : "C" + c0 + "–C" + c1;
     return rs + ", " + cs;
   }
 
@@ -738,45 +951,48 @@
     return out;
   }
 
-  // Compact position summary from already-evaluated near-cells.
-  function buildSummary(b, cands, oWins, xWins, xBuilds) {
-    var oFour = 0, oBroken = 0, oThree = 0, xFour = 0, xBroken = 0, xThree = 0, oForks = 0, xForks = 0;
-    for (var i = 0; i < cands.length; i++) {
-      var ev = cands[i].ev;
-      if (ev.oMax >= 4 && ev.oOpen > 0) oFour++;
-      if (ev.oGapFour) oBroken++;
-      if (ev.oOpenThree || (ev.oMax === 3 && ev.oOpen === 2)) oThree++;
-      if (ev.xMax >= 4 && ev.xOpen > 0) xFour++;
-      if (ev.xGapFour) xBroken++;
-      if (ev.xOpenThree || (ev.xMax === 3 && ev.xOpen === 2)) xThree++;
-      if (ev.doubleO) oForks++;
-      if (ev.doubleX) xForks++;
-    }
+  function buildSummary(b, cands, oWins, xWins, xBuilds, ledger) {
     var focus;
     if (oWins.length) focus = "attack — take the win now";
     else if (xWins.length) focus = "defend — block X's win first";
+    else if (ledger && ledger.xLive.length) focus = "defend — X already has a live four";
+    else if (ledger && ledger.xThrees.length) focus = "defend the live three, including on the flank";
     else if (xBuilds.length) focus = "defend first, then build a fork";
-    else if (oFour || oBroken || oForks) focus = "attack — extend the threat or build a fork";
-    else if (oThree) focus = "attack — grow the open three";
+    else if (ledger && (ledger.oLive.length || ledger.oRush.length)) focus = "attack — extend the threat or build a fork";
     else focus = "develop near existing stones";
     var hot = oWins.concat(xWins).concat(xBuilds.slice(0, 6));
-    var L = ["Position summary:"];
-    L.push(xWins.length ? "- X has " + xWins.length + " immediate winning threat" + (xWins.length > 1 ? "s" : "") + "." : "- No immediate X wins.");
-    L.push(oWins.length ? "- O has " + oWins.length + " immediate winning move" + (oWins.length > 1 ? "s" : "") + "." : "- No immediate O wins.");
-    var oa = [];
-    if (oFour) oa.push(oFour + " open-four");
-    if (oBroken) oa.push(oBroken + " broken-four");
-    if (oThree) oa.push(oThree + " open-three");
-    L.push(oa.length ? "- O attacks: " + oa.join(", ") + " squares." : "- O attacks: none.");
-    var xa = [];
-    if (xFour) xa.push(xFour + " open-four");
-    if (xBroken) xa.push(xBroken + " broken-four");
-    if (xThree) xa.push(xThree + " open-three");
-    L.push(xa.length ? "- X attacks: " + xa.join(", ") + " squares." : "- X attacks: none.");
-    if (oForks || xForks) L.push("- Forks: O " + oForks + " / X " + xForks + " squares.");
+    var L = ["THREAT LEDGER (computed, trust this):"];
+    if (oWins.length) {
+      L.push("O can win now at " + describeKeys(oWins) + ".");
+      oWins.forEach(function (w) {
+        var pat = winPattern(b, w.r, w.c, "O");
+        if (pat) L.push("  " + w.key + "  " + pat);
+      });
+    } else L.push("O has no five this turn.");
+    if (xWins.length) {
+      L.push("X fives (MUST BLOCK — any other key loses): " + describeKeys(xWins) + ".");
+      if (xWins.length >= 2) L.push("X already has two fives (open four / double threat). Unless O wins now, the position is lost.");
+      xWins.forEach(function (w) {
+        var pat = winPattern(b, w.r, w.c, "X");
+        if (pat) L.push("  " + w.key + "  " + pat);
+      });
+    } else L.push("X has no five this turn.");
+    function dump(title, arr) {
+      if (!arr || !arr.length) return;
+      L.push(title);
+      for (var i = 0; i < arr.length && i < 6; i++) L.push("  - " + ledgerLine(arr[i]));
+    }
+    dump("X live fours (unstoppable next unless you win now):", ledger && ledger.xLive);
+    dump("O live fours:", ledger && ledger.oLive);
+    dump("X rush fours (one block point):", ledger && ledger.xRush);
+    dump("O rush fours:", ledger && ledger.oRush);
+    dump("X live threes (block the flank — these become fours next):", ledger && ledger.xThrees);
+    dump("O live threes:", ledger && ledger.oThrees);
+    dump("X half-open threes (one more stone makes a rush four — contest the open end):", ledger && ledger.xSleep);
+    dump("DEAD lines (both ends blocked — do not spend a move here):", ledger && ledger.dead);
     var area = bboxArea(hot.length ? hot : stonesOf(b));
-    if (area) L.push("- Critical area: " + area + ".");
-    L.push("- Strategic focus: " + focus + ".");
+    if (area) L.push("Critical area: " + area + ".");
+    L.push("Strategic focus: " + focus + ".");
     return { text: L.join("\n"), focus: focus };
   }
 
@@ -790,12 +1006,13 @@
         if (b[r][c]) continue;
         var ev = evalCell(b, r, c);
         if (ev.dist > 2 && !ev.oWin && !ev.xWin) continue; // shrink far cells (rule 5)
-        cands.push({ r: r, c: c, key: "r" + r + "c" + c, ev: ev, score: scoreCell(ev) });
+        var sc = scoreCell(ev);
+        cands.push({ r: r, c: c, key: humanCell(r, c), ev: ev, score: sc, rawScore: sc });
       }
     }
-    // Early game (few stones): cands is already small. Late game: sort + cap.
+    var ledger = scanThreatLedger(b);
     cands.sort(function (a, b2) { return b2.score - a.score; });
-    var picked = cands.slice(0, MAX_OPTIONS);
+    var picked = cands.slice(0, 40);
     // Guarantee key cells survive the cap, keeping their natural rank —
     // wins score as wins (100000/90000), builds keep their candidate score.
     function ensure(list) {
@@ -808,32 +1025,28 @@
           var w = list[i];
           if (w.ev) { picked.push(w); continue; }
           var lev = evalCell(b, w.r, w.c);
-          picked.push({ r: w.r, c: w.c, key: w.key, ev: lev, score: scoreCell(lev) });
+          var scw = scoreCell(lev);
+          picked.push({ r: w.r, c: w.c, key: w.key, ev: lev, score: scw, rawScore: scw });
         }
       }
     }
     ensure(oWins);
     ensure(xWins);
-    // X build-up cells: squares where X is one move from a forcing attack
-    // (four / broken-four / open three). Used for coverage + hint below.
     function xBuildStrength(ev) {
-      var s = 0;
-      if (ev.xMax >= 4) s += 7000;
-      else if (ev.xGapFour) s += 6500;
-      else if (ev.xMax === 3) s += ev.xOpen === 2 ? 3500 : 1500;
-      if (ev.xOpenThree) s += 1000;
-      return s;
+      if (ev.xWin) return 100000;
+      if (ev.xLiveFour) return 22000;
+      if (ev.xRushFour || ev.xGapFour) return 11000;
+      if (ev.xOpenThree) return 4500;
+      if (ev.xMax === 3) return ev.xOpen === 2 ? 1800 : 600;
+      return 0;
     }
     var xBuilds = cands
       .filter(function (cd) { return xBuildStrength(cd.ev) >= 1500; })
       .sort(function (a, b2) { return xBuildStrength(b2.ev) - xBuildStrength(a.ev); })
-      .slice(0, 6);
+      .slice(0, 8);
     ensure(xBuilds);
-    // 2-ply safety: if X already has an immediate win, any O move that does
-    // not block it hangs the loss — demote hard with an explicit label.
-    // (Placing O can only remove X wins, never create them, so when xWins is
-    // empty there is nothing to check.) A winning O move itself is safe.
-    // Cost is ~picked × empties line scans — trivial at 15×15.
+    // 2-ply: if X already has an immediate win, any O move that does not
+    // block it hangs the loss.
     if (xWins.length) {
       for (var t = 0; t < picked.length; t++) {
         var pc = picked[t];
@@ -849,102 +1062,124 @@
         }
       }
     }
-    // 3-ply safety (the screenshot blunder): no immediate X five, but X may
-    // be one reply away from a FORCED win — a move creating 2+ immediate
-    // winning cells (open four / double threat), which O cannot stop next.
-    // Simulate each O candidate, then each plausible X reply, counting X's
-    // winning cells with early exit at 2. Gated to hot positions only.
-    if (!xWins.length && xBuilds.length) {
-      var replies = cands.slice()
-        .sort(function (a, b2) { return xBuildStrength(b2.ev) - xBuildStrength(a.ev); })
-        .slice(0, 40);
+    // 3/4-ply: no immediate X five, but this O move may allow a live four,
+    // four-three, or three-three that O cannot stop.
+    if (!oWins.length && !xWins.length) {
       for (var u = 0; u < picked.length; u++) {
         var pu = picked[u];
-        if (pu.ev.oWin || pu.ev.xWin || pu.ev.allowsXWin) continue;
+        if (pu.ev.oWin || pu.ev.allowsXWin) continue;
         var s1 = [];
         for (var a1 = 0; a1 < SIZE; a1++) s1.push(b[a1].slice());
         s1[pu.r][pu.c] = "O";
-        var forceVia = null;
-        for (var v = 0; v < replies.length; v++) {
-          if (s1[replies[v].r][replies[v].c]) continue;
-          s1[replies[v].r][replies[v].c] = "X";
-          var nw = countWinningCellsCapped(s1, "X", 2);
-          s1[replies[v].r][replies[v].c] = "";
-          if (nw >= 2) { forceVia = replies[v].key; break; }
-        }
-        if (forceVia) {
-          pu.ev.allowsXForce = [forceVia];
+        var force = xForcedAfter(s1);
+        if (force) {
+          pu.ev.allowsXForce = [force.kind + "@" + force.key];
           pu.score = scoreCell(pu.ev);
         }
       }
     }
-    // Re-sort after ensure + safety scan so the sent order is always strongest-first.
     picked.sort(function (a, b2) { return b2.score - a.score; });
-    // Absolute fallback: board full of far cells (should not happen) — take center.
     if (!picked.length) {
       var free = legalCells(b).slice(0, MAX_OPTIONS);
       for (var f = 0; f < free.length; f++) {
-        picked.push({ r: free[f].r, c: free[f].c, key: free[f].key, ev: evalCell(b, free[f].r, free[f].c), score: 0 });
+        var fev = evalCell(b, free[f].r, free[f].c);
+        picked.push({ r: free[f].r, c: free[f].c, key: free[f].key, ev: fev, score: 0, rawScore: 0 });
       }
     }
-    // Position summary from all evaluated near-cells (pre-cap, full picture).
-    var summary = buildSummary(b, cands, oWins, xWins, xBuilds);
-    // Principal variation for the top 6, existing local evaluation only.
+    function isAvoid(cell) {
+      return (cell.ev.allowsXWin && cell.ev.allowsXWin.length) ||
+             (cell.ev.allowsXForce && cell.ev.allowsXForce.length);
+    }
+    // Jev must still choose: keep real alternatives, including tempting
+    // LOSES moves so the briefing can argue against them.
+    var keep = [], traps = [];
+    for (var ti = 0; ti < picked.length; ti++) {
+      if (isAvoid(picked[ti]) && !picked[ti].ev.oWin && !picked[ti].ev.xWin) traps.push(picked[ti]);
+      else keep.push(picked[ti]);
+    }
+    var offered = keep.slice(0, MAX_OPTIONS);
+    function inOffered(key) {
+      for (var oi = 0; oi < offered.length; oi++) if (offered[oi].key === key) return true;
+      return false;
+    }
+    for (var ei = 0; ei < picked.length; ei++) {
+      if ((picked[ei].ev.oWin || picked[ei].ev.xWin) && !inOffered(picked[ei].key)) {
+        offered.push(picked[ei]);
+      }
+    }
+    traps.sort(function (a, b2) { return (b2.rawScore || 0) - (a.rawScore || 0); });
+    for (var tr = 0; tr < traps.length && tr < MAX_TRAPS; tr++) {
+      if (!inOffered(traps[tr].key)) offered.push(traps[tr]);
+    }
+    offered.sort(function (a, b2) { return b2.score - a.score; });
+    picked = offered;
+    var summary = buildSummary(b, cands, oWins, xWins, xBuilds, ledger);
     var pvMap = {};
     var pvN = Math.min(6, picked.length);
     for (var q = 0; q < pvN; q++) pvMap[picked[q].key] = pvFor(b, picked[q]);
-    // Tiered one-line labels. Numeric scores stay internal (sort order only).
     var criteria = {};
     for (var p = 0; p < picked.length; p++) {
       var cell = picked[p], evp = cell.ev;
       var avoid = null;
-      if (evp.allowsXWin && evp.allowsXWin.length) avoid = "Avoid (allows X win next)";
-      else if (evp.allowsXForce && evp.allowsXForce.length) avoid = "Avoid (allows X forced win)";
+      if (evp.allowsXWin && evp.allowsXWin.length) {
+        avoid = "LOSES NOW. X still completes five at " + evp.allowsXWin.join(", ") +
+          ". This key does not cover that five.";
+      } else if (evp.allowsXForce && evp.allowsXForce.length) {
+        avoid = "LOSES. X forced win (" + evp.allowsXForce[0] +
+          "). A live flank line survives this move.";
+      }
       var tier = avoid ? "C" : tierOf(evp);
-      var val = "Tier " + tier + " #" + (p + 1) + " — " + (avoid ? avoid : labelCell(cell.r, cell.c, evp));
+      var val = "Tier " + tier + " #" + (p + 1) + " — " +
+        (avoid ? avoid : labelCell(cell.r, cell.c, evp));
       if (pvMap[cell.key]) val += "\n" + pvMap[cell.key];
       criteria[cell.key] = val;
     }
-    return { criteria: criteria, xWins: xWins, oWins: oWins, xBuilds: xBuilds, picked: picked, summary: summary };
+    return {
+      criteria: criteria, xWins: xWins, oWins: oWins, xBuilds: xBuilds,
+      picked: picked, summary: summary, ledger: ledger
+    };
   }
 
-  // Dynamic per-move instructions: summary + memory + protocol + hints.
-  // Jev enforces win/block HIMSELF via prompt, never via client override.
+  function describeKeys(list) {
+    return list.map(function (w) { return humanCell(w.r, w.c); }).join(", ");
+  }
+
   function buildInstructions(analyzed) {
-    var s = BASE_INSTRUCTIONS +
-      "\n\nOptions are ranked Tier S (forced win/block) > A (critical) > B (strong) > C (positional), #1 strongest; follow the order unless you see a forced win." +
-      " Never play a move labeled Avoid — it loses now or hands X a forced win.";
+    var s = BASE_INSTRUCTIONS;
+    s += "\n\nPick exactly one listed key. Ranked Tier S (win/block) > A (live/rush four or fork) > B (live three) > C (positional). #1 is strongest.";
     s += "\n\n" + analyzed.summary.text;
     s += "\n\nPrevious turn:\n- Jev: " + (memJev || "none yet") +
       "\n- Human: " + (memHuman || "none yet") +
       "\n- Previous plan: " + (memPlan || "none yet");
+    if (lastMove && lastMove.who === "X") {
+      s += "\n\nLines through last human stone " + humanCell(lastMove.r, lastMove.c) + " (the stone just played):\n  " +
+        linesThroughStone(board, lastMove.r, lastMove.c).join("\n  ");
+    }
     if (analyzed.oWins.length) {
-      var ow = analyzed.oWins.map(function (w) { return w.key; }).join(", ");
-      s += "\n\nHINT — YOU CAN WIN NOW: O completes five-in-a-row at " + ow +
-        ". You must choose one of these Tier S options this move. Do not play anywhere else.";
+      s += "\n\nLOCK — YOU CAN WIN NOW. Choose one of: " + describeKeys(analyzed.oWins) + ".";
     } else if (analyzed.xWins.length) {
-      var xw = analyzed.xWins.map(function (w) { return w.key; }).join(", ");
-      s += "\n\nHINT — YOU MUST BLOCK NOW: X will complete five next move at " + xw +
-        ". You must choose a Tier S BLOCKS option covering it. Any other move loses immediately." +
-        " Tier C options do NOT save you — ignore symmetry-copying.";
+      s += "\n\nLOCK — YOU MUST BLOCK NOW. Choose one of: " + describeKeys(analyzed.xWins) +
+        ". Every LOSES key in the list is a trap that leaves that five on the board.";
+    } else if (analyzed.ledger && (analyzed.ledger.xThrees.length || analyzed.ledger.xSleep.length)) {
+      s += "\n\nHINT — X has a live or half-open three. Block its open end(s) before it becomes a four. Flank lines first, not the dead center.";
     } else if (analyzed.xBuilds && analyzed.xBuilds.length) {
-      var xb = analyzed.xBuilds.slice(0, 3).map(function (w) { return w.key; }).join(", ");
-      s += "\n\nHINT — X is building toward a forcing attack around " + xb +
-        ". Prefer Tier A options contesting those squares over quiet extensions of your own line." +
-        " Symmetry-copying X elsewhere does NOT stop this — contest the build-up directly.";
+      s += "\n\nHINT — X is building around " + describeKeys(analyzed.xBuilds.slice(0, 3)) +
+        ". Contest those squares. A live three on the flank beats a dead fight in the crowded center.";
     } else {
-      s += "\n\nHINT — no immediate five for either side. Follow the protocol: best Tier A/B attack or fork, stay near stones.";
+      s += "\n\nHINT — no immediate five. Best Tier A/B attack or fork, stay near stones.";
     }
     return s;
   }
 
-  function bestLegalFromProbabilities(probs, b) {
+  function bestLegalFromProbabilities(probs, b, allowed) {
     if (!probs || typeof probs !== "object") return null;
     var best = null, bestP = -Infinity;
     function consider(key, p) {
       var pos = parseKey(key);
       if (!pos) return;
       if (b[pos.r][pos.c]) return; // occupied
+      var ck = humanCell(pos.r, pos.c);
+      if (allowed && !Object.prototype.hasOwnProperty.call(allowed, ck)) return;
       var num = Number(p);
       if (!isFinite(num)) return;
       if (num > bestP) { bestP = num; best = pos; }
@@ -981,11 +1216,18 @@
     var body = {
       model: model,
       state: {
-        game: "15x15 five-in-a-row",
+        game: "five-in-a-row",
         win_length: 5,
         to_move: "O",
-        legend: ". empty, X human, O Jef",
-        board: boardToStrings(board)
+        coordinate_system: "0-based, R0C0 top-left, R14C14 bottom-right, keys R{row}C{col}",
+        legend: ". empty, X human, O Jev",
+        last_human_move: memHuman,
+        last_jev_move: memJev,
+        board: boardToStrings(board),
+        board_labeled: boardToLabeled(board),
+        lines_through_last_human: (lastMove && lastMove.who === "X")
+          ? linesThroughStone(board, lastMove.r, lastMove.c)
+          : null
       },
       questions: {
         next_move: {
@@ -1042,39 +1284,41 @@
       } else if (!choice) {
         warn = "Jev response had no usable choice; fell back to a legal cell.";
       }
-      // Hints-first: if Jev's own legal choice ignores the hint, keep his move
-      // but surface it — this tells us whether the hints are working.
-      if (pos && !board[pos.r][pos.c]) {
-        var ckey = "r" + pos.r + "c" + pos.c;
-        var inList = function (list) {
-          for (var li = 0; li < list.length; li++) if (list[li].key === ckey) return true;
-          return false;
-        };
-        if (analyzed.oWins.length && !inList(analyzed.oWins)) {
-          warn = (warn ? warn + " " : "") + "Note: Jev ignored WIN hint (" + analyzed.oWins.map(function (w) { return w.key; }).join(", ") + ").";
-        } else if (!analyzed.oWins.length && analyzed.xWins.length && !inList(analyzed.xWins)) {
-          warn = (warn ? warn + " " : "") + "Note: Jev ignored MUST-BLOCK hint (" + analyzed.xWins.map(function (w) { return w.key; }).join(", ") + ").";
+      if (pos) {
+        var ckey = humanCell(pos.r, pos.c);
+        if (!Object.prototype.hasOwnProperty.call(criteria, ckey)) {
+          warn = (warn ? warn + " " : "") + "Jev chose " + ckey + " outside the option list; ignoring.";
+          pos = null;
+        } else {
+          var inList = function (list) {
+            for (var li = 0; li < list.length; li++) if (list[li].key === ckey) return true;
+            return false;
+          };
+          if (analyzed.oWins.length && !inList(analyzed.oWins)) {
+            warn = (warn ? warn + " " : "") + "DEMO: Jev ignored WIN at " + describeKeys(analyzed.oWins) + " and played " + ckey + ".";
+          } else if (!analyzed.oWins.length && analyzed.xWins.length && !inList(analyzed.xWins)) {
+            warn = (warn ? warn + " " : "") + "DEMO: Jev ignored MUST-BLOCK at " + describeKeys(analyzed.xWins) + " and played " + ckey + ".";
+          }
         }
       }
 
       if (!pos && probs) {
-        var bp = bestLegalFromProbabilities(probs, board);
+        var bp = bestLegalFromProbabilities(probs, board, criteria);
         if (bp) {
           pos = bp;
-          warn = (warn ? warn + " " : "") + "Used highest-probability legal cell.";
+          warn = (warn ? warn + " " : "") + "Used highest-probability listed cell.";
         }
       }
       if (!pos) {
-        // Local tactical fallback (no API trust needed): win > block > best labeled.
         if (analyzed.oWins.length && !board[analyzed.oWins[0].r][analyzed.oWins[0].c]) {
           pos = { r: analyzed.oWins[0].r, c: analyzed.oWins[0].c };
-          warn = (warn ? warn + " " : "") + "Fallback: played local winning move " + analyzed.oWins[0].key + ".";
+          warn = (warn ? warn + " " : "") + "Fallback: played local winning move " + humanCell(analyzed.oWins[0].r, analyzed.oWins[0].c) + ".";
         } else if (analyzed.xWins.length && !board[analyzed.xWins[0].r][analyzed.xWins[0].c]) {
           pos = { r: analyzed.xWins[0].r, c: analyzed.xWins[0].c };
-          warn = (warn ? warn + " " : "") + "Fallback: blocked X's win at " + analyzed.xWins[0].key + ".";
+          warn = (warn ? warn + " " : "") + "Fallback: blocked X's win at " + humanCell(analyzed.xWins[0].r, analyzed.xWins[0].c) + ".";
         } else if (analyzed.picked.length) {
           pos = { r: analyzed.picked[0].r, c: analyzed.picked[0].c };
-          warn = (warn ? warn + " " : "") + "Fallback: played top tactical candidate " + analyzed.picked[0].key + ".";
+          warn = (warn ? warn + " " : "") + "Fallback: played top tactical candidate " + humanCell(analyzed.picked[0].r, analyzed.picked[0].c) + ".";
         }
       }
       if (!pos) {
@@ -1090,7 +1334,7 @@
 
       board[pos.r][pos.c] = "O";
       lastMove = { r: pos.r, c: pos.c, who: "O" };
-      lastJevCell = "r" + pos.r + "c" + pos.c;
+      lastJevCell = humanCell(pos.r, pos.c);
       lastJevRC = { r: pos.r, c: pos.c };
       memJev = lastJevCell;
       memPlan = analyzed.summary.focus;
@@ -1100,7 +1344,7 @@
       else if (boardFull(board)) { winner = "Draw"; gameLive = false; }
       renderStatus({ warn: warn });
       renderTraffic(
-        "Move #" + myExchange + ": Jev chose " + lastJevCell + " (" + humanCell(pos.r, pos.c) + ")" + (lastConfidence != null ? " (confidence " + lastConfidence + ")" : "") + (warn ? " — " + warn : ""),
+        "Move #" + myExchange + ": Jev chose " + lastJevCell + (lastConfidence != null ? " (confidence " + lastConfidence + ")" : "") + (warn ? " — " + warn : ""),
         reqText,
         "choice=" + String(choice) + (lastConfidence != null ? " confidence=" + lastConfidence : "") + "\n\n" + pretty(data)
       );
@@ -1129,7 +1373,7 @@
     }
     board[r][c] = "X";
     lastMove = { r: r, c: c, who: "X" };
-    memHuman = "r" + r + "c" + c;
+    memHuman = humanCell(r, c);
     var line = checkWin(board, r, c, "X");
     if (line) {
       winner = "X"; winningLine = line; gameLive = false;
@@ -1145,7 +1389,7 @@
   }
 
   // ---- p5 ----
-  // Board geometry: left/top gutter holds the R1–R15 / C1–C15 legends.
+  // Board geometry: left/top gutter holds the R0–R14 / C0–C14 legends.
   function boardMetrics() {
     var L = Math.max(30, Math.floor(window.width * 0.075));
     var pad = Math.max(8, Math.floor(L * 0.35));
@@ -1244,7 +1488,7 @@
       }
     }
 
-    // R1–R15 / C1–C15 legends (1-based display; API keys stay r0–r14/c0–c14).
+    // R0–R14 / C0–C14 legends (same 0-based numbers as move keys).
     var winSet = {};
     for (var wi = 0; wi < winningLine.length; wi++) winSet[winningLine[wi].r + ":" + winningLine[wi].c] = true;
     window.noStroke();
@@ -1252,10 +1496,10 @@
     window.textStyle(window.BOLD);
     window.textSize(Math.max(9, cell * 0.30));
     for (var lr = 0; lr < n; lr++) {
-      window.text("R" + (lr + 1), ox / 2, oy + lr * cell + cell / 2 + 1);
+      window.text("R" + lr, ox / 2, oy + lr * cell + cell / 2 + 1);
     }
     for (var lc = 0; lc < n; lc++) {
-      window.text("C" + (lc + 1), ox + lc * cell + cell / 2, oy / 2);
+      window.text("C" + lc, ox + lc * cell + cell / 2, oy / 2);
     }
     window.textStyle(window.NORMAL);
 
