@@ -1,22 +1,23 @@
 <!DOCTYPE html>
 <!--
-  CORS NOTE (please read before local testing):
-  1. This page calls https://api.typesafe.ai directly from the browser via fetch.
-  2. If the API does not send CORS headers, the browser will block the response.
-  3. Do NOT paste your key into any random public CORS proxy to work around this.
-  4. A public proxy would see your Authorization header and could steal your key.
-  5. For local testing only, run a tiny proxy YOU control (e.g. localhost) that
-  6. forwards to api.typesafe.ai and adds Access-Control-Allow-Origin for you.
-  7. Alternatively launch the browser with CORS disabled purely for local tests.
-  8. Never commit, log, or share your key; keep it in memory + password field.
-  9. This file never stores the key in localStorage, cookies, URLs, or logs.
-  10. If fetch fails with a CORS TypeError, check DevTools console (redacted).
+  CLASSIFIER NOTE:
+  The opponent (O) is chosen with the Classifier combo box:
+  - "Jev (TypeSafe AI)": POSTs {model, state, questions.next_move} to the
+    TypeSafe endpoint with your API key (Bearer). api.typesafe.ai sends no
+    CORS headers, so the browser must go through a proxy YOU control:
+    either `python proxy.py` (/systemone, localhost) or your own worker.
+    Never paste the key into a random public proxy.
+  - "Classifier.dev": POSTs {input, labels, instructions} keyless to
+    https://classifier.dev/v1/classify (CORS-open), labels = candidate
+    moves, input = briefing text, returned label = O's move.
+  Local tactics always write the briefing; the selected classifier chooses.
+  The key lives in memory + password field only (never stored/logged).
 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Jev (TypeSafe AI) Gomoku demo</title>
+<title>Gomoku demo — Jev / Classifier.dev</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
 <style>
   :root {
@@ -73,12 +74,12 @@
   }
   .field { display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem; font-weight: 600; flex: 1 1 260px; }
   .field span.hint-inline { font-weight: 400; color: var(--muted); }
-  .field input {
+  .field input, .field select {
     padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 10px;
     font-size: 0.95rem; min-width: 0; width: 100%; background: #f8fafc;
     transition: border-color 0.15s, box-shadow 0.15s;
   }
-  .field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.18); background: #fff; }
+  .field input:focus, .field select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.18); background: #fff; }
   button {
     padding: 11px 18px; border-radius: 10px; border: none;
     background: linear-gradient(135deg, var(--accent), var(--accent2));
@@ -132,19 +133,25 @@
     <div class="brand">
       <div class="logo" aria-hidden="true">5◦</div>
       <div>
-        <h1>Jev (TypeSafe AI) Gomoku demo</h1>
-        <p class="subtitle">Human is X, Jev is O. The harness briefs; Jev chooses.</p>
+        <h1 id="gameTitle">Gomoku demo</h1>
+        <p class="subtitle" id="gameSubtitle">Human is X, opponent is O.</p>
       </div>
     </div>
     <div class="badges">
       <span class="badge">X · You</span>
-      <span class="badge">O · Jev</span>
+      <span class="badge" id="badgeO">O · Opponent</span>
       <span class="badge green">5 in a row wins</span>
     </div>
   </header>
 
   <div class="controls">
-    <label class="field" for="apiKey">TypeSafe API key 
+    <label class="field" for="classifierSel">Classifier
+      <select id="classifierSel">
+        <option value="jev" selected>Jev (TypeSafe AI)</option>
+        <option value="classifierdev">Classifier.dev</option>
+      </select>
+    </label>
+    <label class="field" for="apiKey" id="apiKeyField">TypeSafe API key
       <input id="apiKey" type="password" autocomplete="off" placeholder="paste key here" />
     </label>
     <button id="newGameBtn" type="button">↺ New Game</button>
@@ -156,8 +163,8 @@
       <p class="board-title">Board</p>
       <div id="canvas-holder"></div>
     </section>
-    <aside id="inspector" aria-label="Jev API traffic">
-      <h2><span class="live-dot" aria-hidden="true"></span>Jev traffic <span style="font-weight:400;color:#64748b">(key redacted)</span></h2>
+    <aside id="inspector" aria-label="Classifier API traffic">
+      <h2><span class="live-dot" aria-hidden="true"></span><span id="trafficTitle">Classifier traffic</span>&nbsp;<span id="trafficNote" style="font-weight:400;color:#64748b"></span></h2>
       <div class="meta" id="trafficMeta">No requests yet.</div>
       <div class="meta">Request &rarr;</div>
       <pre id="reqPre">—</pre>
@@ -174,7 +181,25 @@
 
   var SIZE = 15;
   var WIN = 5;
-  var API_URL = "https://typesafe-cors-proxy.vita-vacek.workers.dev/";
+  // Opponent backends. Jev (TypeSafe) needs a key + a proxy you control
+  // (api.typesafe.ai sends no CORS headers); classifier.dev is keyless
+  // and CORS-open. Docs: https://classifier.dev/ Spec: https://classifier.dev/openapi.json
+  var CLASSIFIERS = {
+    jev: {
+      name: "Jev",
+      fullName: "Jev (TypeSafe AI)",
+      url: "https://typesafe-cors-proxy.vita-vacek.workers.dev/",
+      needsKey: true,
+      note: "(key redacted)"
+    },
+    classifierdev: {
+      name: "Classifier.dev",
+      fullName: "Classifier.dev",
+      url: "https://classifier.dev/v1/classify",
+      needsKey: false,
+      note: "(keyless · classifier.dev)"
+    }
+  };
 
   var board = [];
   var gameLive = true;
@@ -183,8 +208,49 @@
   var lastMove = null;      // {r, c, who}
   var winningLine = [];     // [{r,c}]
   var statusEl = document.getElementById("status");
-  var apiKeyEl = document.getElementById("apiKey");
   var newGameBtn = document.getElementById("newGameBtn");
+  var classifierSel = document.getElementById("classifierSel");
+  var apiKeyEl = document.getElementById("apiKey");
+  var apiKeyField = document.getElementById("apiKeyField");
+  var gameTitleEl = document.getElementById("gameTitle");
+  var gameSubtitleEl = document.getElementById("gameSubtitle");
+  var badgeOEl = document.getElementById("badgeO");
+  var trafficTitleEl = document.getElementById("trafficTitle");
+  var trafficNoteEl = document.getElementById("trafficNote");
+  // ---- Classifier selection: every user-visible string derives from this ----
+  function selectedClassifier() {
+    var v = classifierSel && classifierSel.value;
+    return Object.prototype.hasOwnProperty.call(CLASSIFIERS, v) ? v : "jev";
+  }
+
+  function classifierCfg() {
+    return CLASSIFIERS[selectedClassifier()];
+  }
+
+  function classifierName() {
+    return classifierCfg().name;
+  }
+
+  function classifierUrl() {
+    return classifierCfg().url;
+  }
+
+  // Sync title, subtitle, badge, key field, traffic header + status with the combo.
+  function refreshClassifierUI() {
+    var cfg = classifierCfg();
+    if (apiKeyField) apiKeyField.style.display = cfg.needsKey ? "" : "none";
+    if (gameTitleEl) gameTitleEl.textContent = cfg.fullName + " Gomoku demo";
+    if (gameSubtitleEl) {
+      gameSubtitleEl.textContent = "Human is X, " + cfg.name + " is O. The harness briefs; " +
+        cfg.name + " chooses" + (cfg.needsKey ? " — key required." : " — no key needed.");
+    }
+    if (badgeOEl) badgeOEl.textContent = "O · " + cfg.name;
+    if (trafficTitleEl) trafficTitleEl.textContent = cfg.name + " traffic";
+    if (trafficNoteEl) trafficNoteEl.textContent = cfg.note;
+    try { document.title = cfg.fullName + " Gomoku demo"; } catch (e) {}
+    renderStatus({});
+  }
+
   var gameId = 0;           // bumped on New Game to ignore stale responses
   var lastJevCell = null;
   var lastJevRC = null; // {r, c} 0-based, shown as R0C0–R14C14
@@ -248,18 +314,19 @@
 
   function renderStatus(opts) {
     opts = opts || {};
+    var name = classifierName();
     var turn;
     if (winner === "X") turn = "Game over — X (you) win!";
-    else if (winner === "O") turn = "Game over — O (Jev) wins.";
+    else if (winner === "O") turn = "Game over — O (" + name + ") wins.";
     else if (winner === "Draw") turn = "Game over — draw, board is full.";
-    else if (waiting) turn = "Jev (O) is thinking… board disabled.";
+    else if (waiting) turn = name + " (O) is thinking… board disabled.";
     else turn = "Your turn (X) — click an empty square.";
 
     var html = esc(turn);
     if (lastJevCell) {
       var hm =  humanCell(lastJevRC.r, lastJevRC.c);
       var cf = lastConfidence != null ? " (confidence " + lastConfidence + ")" : "";
-      html += "<br>" + esc("Last Jev move: " + hm + cf);
+      html += "<br>" + esc("Last " + name + " move: " + hm + cf);
     }
     if (opts.warn) html += '<br><span class="warn">' + esc(redact(opts.warn)) + "</span>";
     if (opts.error) html += '<br><span class="err">' + esc(redact(opts.error)) + "</span>";
@@ -280,12 +347,17 @@
     memJev = null;
     memHuman = null;
     memPlan = null;
-    // Do NOT clear the API key input (required).
+    // Do NOT clear the API key input (required for Jev).
     renderStatus({});
     renderTraffic("No requests yet.", "—", "—");
   }
 
   newGameBtn.addEventListener("click", newGame);
+  if (classifierSel) classifierSel.addEventListener("change", function () {
+    gameId++;               // changing classifier starts no new game, but stale
+    waiting = false;        // in-flight replies belong to the old backend
+    refreshClassifierUI();
+  });
 
   function inBounds(r, c) {
     return r >= 0 && r < SIZE && c >= 0 && c < SIZE;
@@ -340,7 +412,7 @@
     return rows;
   }
 
-  // Aligned 0-based labeled board for Jev's state (matches on-screen legend).
+  // Aligned 0-based labeled board for the classifier's state (matches on-screen legend).
   function boardToLabeled(b) {
     var h = "   ";
     var c, r;
@@ -421,7 +493,7 @@
     return null;
   }
 
-  // Named live/dead lines. This is the briefing Jev should trust over the crowd.
+  // Named live/dead lines. This is the briefing the classifier should trust over the crowd.
   function scanThreatLedger(b) {
     var xFives = [], oFives = [], xLive = [], oLive = [], xRush = [], oRush = [];
     var xThrees = [], oThrees = [], xSleep = [], oSleep = [], dead = [];
@@ -514,9 +586,19 @@
     return cur;
   }
 
-  // Robust choice/probabilities/confidence extraction: the documented path is
-  // answers.next_move.choice, but probe nearby shapes without ever logging keys.
+  // Robust choice/probabilities/confidence extraction for both backends:
+  // classifier.dev answers { results: [{ label, confidence, scores }] },
+  // Jev (TypeSafe) answers answers.next_move.{ choice, probabilities, confidence }.
+  function firstResult(data) {
+    var r = getPath(data, ["results", 0]) || getPath(data, ["result"]);
+    if (r && typeof r === "object") return r;
+    return null;
+  }
+
   function extractChoice(data) {
+    var fr = firstResult(data);
+    if (fr && typeof fr.label === "string" && fr.label) return fr.label.trim();
+    if (typeof data.label === "string" && data.label) return data.label.trim();
     var paths = [
       ["answers", "next_move", "choice"],
       ["answers", "nextMove", "choice"],
@@ -546,6 +628,9 @@
   }
 
   function extractProbabilities(data) {
+    var fr = firstResult(data);
+    if (fr && fr.scores && typeof fr.scores === "object") return fr.scores;
+    if (data.scores && typeof data.scores === "object") return data.scores;
     var paths = [
       ["answers", "next_move", "probabilities"],
       ["answers", "nextMove", "probabilities"],
@@ -561,6 +646,9 @@
   }
 
   function extractConfidence(data) {
+    var fr = firstResult(data);
+    if (fr && (typeof fr.confidence === "number" || typeof fr.confidence === "string")) return fr.confidence;
+    if (typeof data.confidence === "number" || typeof data.confidence === "string") return data.confidence;
     var paths = [
       ["answers", "next_move", "confidence"],
       ["answers", "nextMove", "confidence"],
@@ -574,13 +662,17 @@
     return null;
   }
 
-  // ---- Briefing layer: the harness analyzes, Jev decides ----
+  // ---- Briefing layer: the harness analyzes, the classifier decides ----
   // Local tactics write a coach-style prompt (ledger, line scans, contrastive
-  // labels). Jev's listed choice is always played. Fallback is only for
+  // labels). The listed choice is always played. Fallback is only for
   // missing/malformed/occupied replies — never to "fix" a legal ignore.
   var MAX_OPTIONS = 12;
   var MAX_TRAPS = 4;
-  var BASE_INSTRUCTIONS = "You are Jev, playing O in five-in-a-row (Gomoku) on a 15×15 board. Place exactly one stone.\n\nCoordinates are 0-based and match the board legend: R0C0 is top-left, R14C14 is bottom-right. Option keys are R{row}C{col}.\n\nThe threat ledger below is computed and correct. Trust it over how busy the center looks. A live three on the edge of the group beats a blocked four in the crowd.\n\nDecision protocol:\n1. If any option WINS O now, pick it.\n2. If any option is MUST BLOCK, pick one of those keys. Any other key loses immediately.\n3. Never pick a key whose label starts with LOSES.\n4. Stop X live fours, then live threes — including on the flank.\n5. Ignore lines marked DEAD (both ends blocked; a five cannot fit).\n6. Prefer forks (two threats at once).\n7. Stay near existing stones.";
+  // The prompt names the selected classifier (combo box), so the model
+  // answers in that role regardless of which backend is active.
+  function baseInstructions() {
+    return "You are " + classifierName() + ", playing O in five-in-a-row (Gomoku) on a 15×15 board. Place exactly one stone.\n\nCoordinates are 0-based and match the board legend: R0C0 is top-left, R14C14 is bottom-right. Option keys are R{row}C{col}.\n\nThe threat ledger below is computed and correct. Trust it over how busy the center looks. A live three on the edge of the group beats a blocked four in the crowd.\n\nDecision protocol:\n1. If any option WINS O now, pick it.\n2. If any option is MUST BLOCK, pick one of those keys. Any other key loses immediately.\n3. Never pick a key whose label starts with LOSES.\n4. Stop X live fours, then live threes — including on the flank.\n5. Ignore lines marked DEAD (both ends blocked; a five cannot fit).\n6. Prefer forks (two threats at once).\n7. Stay near existing stones.";
+  }
 
   function dirName(dr, dc) {
     if (dr === 0 && dc === 1) return "horizontal";
@@ -1087,7 +1179,7 @@
       return (cell.ev.allowsXWin && cell.ev.allowsXWin.length) ||
              (cell.ev.allowsXForce && cell.ev.allowsXForce.length);
     }
-    // Jev must still choose: keep real alternatives, including tempting
+    // The classifier must still choose: keep real alternatives, including tempting
     // LOSES moves so the briefing can argue against them.
     var keep = [], traps = [];
     for (var ti = 0; ti < picked.length; ti++) {
@@ -1142,10 +1234,10 @@
   }
 
   function buildInstructions(analyzed) {
-    var s = BASE_INSTRUCTIONS;
+    var s = baseInstructions();
     s += "\n\nPick exactly one listed key. Ranked Tier S (win/block) > A (live/rush four or fork) > B (live three) > C (positional). #1 is strongest.";
     s += "\n\n" + analyzed.summary.text;
-    s += "\n\nPrevious turn:\n- Jev: " + (memJev || "none yet") +
+    s += "\n\nPrevious turn:\n- " + classifierName() + ": " + (memJev || "none yet") +
       "\n- Human: " + (memHuman || "none yet") +
       "\n- Previous plan: " + (memPlan || "none yet");
     if (lastMove && lastMove.who === "X") {
@@ -1198,42 +1290,102 @@
     return best;
   }
 
-  function requestJevMove(myGameId) {
-    var key = apiKeyEl.value; // memory + input only; never stored/logged
-    if (!key || !key.trim()) {
-      waiting = false;
-      renderStatus({ error: "Missing API key: paste your TypeSafe API key first. No request was sent." });
-      return;
-    }
-    var model = "jev-latest"; // fixed default; no UI override
-
+  function requestOppMove(myGameId) {
+    var cfg = classifierCfg();
+    var name = cfg.name;
+    var isJev = selectedClassifier() === "jev";
     var analyzed = buildLabeledCriteria(board);
     var criteria = analyzed.criteria;
+    var labels = Object.keys(criteria);
 
-    var body = {
-      model: model,
-      state: {
-        game: "five-in-a-row",
-        win_length: 5,
-        to_move: "O",
-        coordinate_system: "0-based, R0C0 top-left, R14C14 bottom-right, keys R{row}C{col}",
-        legend: ". empty, X human, O Jev",
-        last_human_move: memHuman,
-        last_jev_move: memJev,
-        board: boardToStrings(board),
-        board_labeled: boardToLabeled(board),
-        lines_through_last_human: (lastMove && lastMove.who === "X")
-          ? linesThroughStone(board, lastMove.r, lastMove.c)
-          : null
-      },
-      questions: {
-        next_move: {
-          type: "choice",
-          instructions: buildInstructions(analyzed),
-          criteria: criteria
-        }
+    // classifier.dev requires 2–100 labels. With 0–1 legal moves there is
+    // nothing to choose — play it locally instead of sending a bad request.
+    // (Jev accepts any count, but the local move is identical either way.)
+    if (labels.length < 2) {
+      var only = analyzed.picked.length ? analyzed.picked[0] : (legalCells(board)[0] || null);
+      if (!only) {
+        waiting = false; winner = "Draw"; gameLive = false;
+        renderStatus({ warn: "Board is full — draw." });
+        return;
       }
-    };
+      board[only.r][only.c] = "O";
+      lastMove = { r: only.r, c: only.c, who: "O" };
+      lastJevCell = humanCell(only.r, only.c);
+      lastJevRC = { r: only.r, c: only.c };
+      memJev = lastJevCell;
+      memPlan = analyzed.summary.focus;
+      var onlyLine = checkWin(board, only.r, only.c, "O");
+      waiting = false;
+      if (onlyLine) { winner = "O"; winningLine = onlyLine; gameLive = false; }
+      else if (boardFull(board)) { winner = "Draw"; gameLive = false; }
+      renderStatus({ warn: "Only one legal cell — played " + lastJevCell + " locally (no request sent)." });
+      return;
+    }
+
+    var briefing = buildInstructions(analyzed);
+    var url = classifierUrl();
+    var body, headers, reqHead;
+    if (isJev) {
+      // Jev (TypeSafe AI): choice question over the labeled criteria.
+      var key = apiKeyEl.value; // memory + input only; never stored/logged
+      if (!key || !key.trim()) {
+        waiting = false;
+        renderStatus({ error: "Missing API key: paste your TypeSafe API key first. No request was sent." });
+        return;
+      }
+      body = {
+        model: "jev-latest", // fixed default; no UI override
+        state: {
+          game: "five-in-a-row",
+          win_length: 5,
+          to_move: "O",
+          coordinate_system: "0-based, R0C0 top-left, R14C14 bottom-right, keys R{row}C{col}",
+          legend: ". empty, X human, O " + name,
+          last_human_move: memHuman,
+          last_jev_move: memJev,
+          board: boardToStrings(board),
+          board_labeled: boardToLabeled(board),
+          lines_through_last_human: (lastMove && lastMove.who === "X")
+            ? linesThroughStone(board, lastMove.r, lastMove.c)
+            : null
+        },
+        questions: {
+          next_move: {
+            type: "choice",
+            instructions: briefing,
+            criteria: criteria
+          }
+        }
+      };
+      headers = {
+        "Authorization": "Bearer " + key,
+        "Content-Type": "application/json"
+      };
+      reqHead = "Authorization: Bearer [REDACTED]";
+    } else {
+      // Classifier.dev: labels = candidate moves, input = briefing text.
+      var optionLines = labels.map(function (k) { return k + ": " + criteria[k]; });
+      var inputText =
+        briefing +
+        "\n\nBoard (0-based, R0C0 top-left, . empty, X human, O " + name + "):\n" +
+        boardToLabeled(board) +
+        "\n\nCandidate moves (reply with exactly one of these keys):\n" +
+        optionLines.join("\n");
+      // classifier.dev caps input at 32,000 chars; stay safely under.
+      if (inputText.length > 30000) inputText = inputText.slice(0, 30000);
+      body = {
+        input: inputText,
+        labels: labels,
+        instructions: "You are O playing five-in-a-row (Gomoku) on 15x15. " +
+          "Pick exactly one listed move key. Tier S (win/block) > A > B > C. " +
+          "If a win exists take it; if the opponent has five you must block. " +
+          "Never pick a LOSES key."
+      };
+      headers = {
+        "Content-Type": "application/json"
+      };
+      reqHead = "Content-Type: application/json (no key)";
+    }
 
     waiting = true;
     renderStatus({});
@@ -1241,21 +1393,19 @@
     exchangeCount++;
     var myExchange = exchangeCount;
     var emptyTotal = legalCells(board).length;
-    var reqText = "POST " + API_URL + "\nAuthorization: Bearer [REDACTED]\nContent-Type: application/json\n\n" + pretty(body);
+    var reqText = "POST " + url + "\n" + reqHead + "\nContent-Type: application/json\n\n" + pretty(body);
     renderTraffic(
-      "Move #" + myExchange + ": sent " + Object.keys(criteria).length + " labeled options (" + emptyTotal + " empties) — waiting for Jev…",
+      "Move #" + myExchange + ": sent " + Object.keys(criteria).length + " labeled options (" + emptyTotal + " empties) — waiting for " + name + "…",
       reqText,
       "… waiting for response …"
     );
 
-    // NOTE: key goes only to API_URL (your localhost proxy, which forwards to
-    // https://api.typesafe.ai). Never send it anywhere else.
-    fetch(API_URL, {
+    // NOTE: the key goes only to the configured Jev endpoint (a proxy YOU
+    // control — never a random public one). classifier.dev is keyless and
+    // CORS-open; the browser calls it directly.
+    fetch(url, {
       method: "POST",
-      headers: {
-        "Authorization": "Bearer " + key,
-        "Content-Type": "application/json"
-      },
+      headers: headers,
       body: JSON.stringify(body)
     }).then(function (resp) {
       if (!resp.ok) {
@@ -1274,17 +1424,17 @@
 
       var pos = choice ? parseKey(choice) : null;
       if (pos && board[pos.r][pos.c]) {
-        warn = "Jev chose occupied cell " + choice + "; fell back to a legal cell.";
+        warn = name + " chose occupied cell " + choice + "; fell back to a legal cell.";
         pos = null;
       } else if (choice && !pos) {
-        warn = 'Jev returned malformed choice "' + String(choice).slice(0, 40) + '"; fell back to a legal cell.';
+        warn = name + ' returned malformed choice "' + String(choice).slice(0, 40) + '"; fell back to a legal cell.';
       } else if (!choice) {
-        warn = "Jev response had no usable choice; fell back to a legal cell.";
+        warn = name + " response had no usable choice; fell back to a legal cell.";
       }
       if (pos) {
         var ckey = humanCell(pos.r, pos.c);
         if (!Object.prototype.hasOwnProperty.call(criteria, ckey)) {
-          warn = (warn ? warn + " " : "") + "Jev chose " + ckey + " outside the option list; ignoring.";
+          warn = (warn ? warn + " " : "") + name + " chose " + ckey + " outside the option list; ignoring.";
           pos = null;
         } else {
           var inList = function (list) {
@@ -1292,9 +1442,9 @@
             return false;
           };
           if (analyzed.oWins.length && !inList(analyzed.oWins)) {
-            warn = (warn ? warn + " " : "") + "DEMO: Jev ignored WIN at " + describeKeys(analyzed.oWins) + " and played " + ckey + ".";
+            warn = (warn ? warn + " " : "") + "DEMO: " + name + " ignored WIN at " + describeKeys(analyzed.oWins) + " and played " + ckey + ".";
           } else if (!analyzed.oWins.length && analyzed.xWins.length && !inList(analyzed.xWins)) {
-            warn = (warn ? warn + " " : "") + "DEMO: Jev ignored MUST-BLOCK at " + describeKeys(analyzed.xWins) + " and played " + ckey + ".";
+            warn = (warn ? warn + " " : "") + "DEMO: " + name + " ignored MUST-BLOCK at " + describeKeys(analyzed.xWins) + " and played " + ckey + ".";
           }
         }
       }
@@ -1341,7 +1491,7 @@
       else if (boardFull(board)) { winner = "Draw"; gameLive = false; }
       renderStatus({ warn: warn });
       renderTraffic(
-        "Move #" + myExchange + ": Jev chose " + lastJevCell + (lastConfidence != null ? " (confidence " + lastConfidence + ")" : "") + (warn ? " — " + warn : ""),
+        "Move #" + myExchange + ": " + name + " chose " + lastJevCell + (lastConfidence != null ? " (confidence " + lastConfidence + ")" : "") + (warn ? " — " + warn : ""),
         reqText,
         "choice=" + String(choice) + (lastConfidence != null ? " confidence=" + lastConfidence : "") + "\n\n" + pretty(data)
       );
@@ -1350,7 +1500,9 @@
       waiting = false;
       var msg = err && err.message ? err.message : String(err);
       if (err instanceof TypeError) {
-        msg += " (possible CORS/network block — see note at top of file; use a proxy you control for local testing)";
+        msg += isJev
+          ? " (possible CORS/network block — Jev needs a proxy you control; see note at top of file)"
+          : " (possible CORS/network block — classifier.dev is CORS-open, so check your connection)";
       }
       // Never logs the key: redact before console + DOM.
       if (typeof console !== "undefined" && console.error) console.error(redact(msg));
@@ -1361,12 +1513,14 @@
 
   function humanClick(r, c) {
     if (!gameLive || winner) return;
-    if (waiting) return;                    // board disabled while Jev thinks
+    if (waiting) return;                    // board disabled while opponent thinks
     if (!inBounds(r, c) || board[r][c]) return;
-    var key = apiKeyEl.value;
-    if (!key || !key.trim()) {              // refuse to play without a key
-      renderStatus({ error: "Missing API key: paste your TypeSafe API key first. No request was sent." });
-      return;
+    if (classifierCfg().needsKey) {
+      var key = apiKeyEl.value;
+      if (!key || !key.trim()) {            // refuse to play without a key
+        renderStatus({ error: "Missing API key: paste your TypeSafe API key first. No request was sent." });
+        return;
+      }
     }
     board[r][c] = "X";
     lastMove = { r: r, c: c, who: "X" };
@@ -1382,7 +1536,7 @@
       renderStatus({});
       return;
     }
-    requestJevMove(gameId);
+    requestOppMove(gameId);
   }
 
   // ---- p5 ----
@@ -1440,7 +1594,7 @@
     var cnv = window.createCanvas(w, w);
     cnv.parent("canvas-holder");
     window.textAlign(window.CENTER, window.CENTER);
-    renderStatus({});
+    refreshClassifierUI(); // sync title, badge, key field + status with the combo
   };
 
   window.windowResized = function () {
